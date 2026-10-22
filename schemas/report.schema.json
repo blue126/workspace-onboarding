@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "platform",
+    "code",
+    "package_verified",
+    "client_ready",
+    "tunnel_handshake",
+    "ssh_identity",
+    "assigned_vm",
+    "sudo",
+    "cli",
+    "sftp_roundtrip",
+    "claude_auth",
+    "real_task"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "platform": {
+      "enum": [
+        "windows",
+        "macos",
+        "linux",
+        "unsupported"
+      ]
+    },
+    "code": {
+      "type": "string",
+      "pattern": "^[A-Z_]+$"
+    },
+    "package_verified": {
+      "type": "boolean"
+    },
+    "client_ready": {
+      "type": "boolean"
+    },
+    "tunnel_handshake": {
+      "enum": [
+        "pending",
+        "passed",
+        "failed",
+        "unavailable",
+        "user_action_required"
+      ]
+    },
+    "ssh_identity": {
+      "enum": [
+        "pending",
+        "passed",
+        "failed",
+        "unavailable",
+        "user_action_required"
+      ]
+    },
+    "assigned_vm": {
+      "enum": [
+        "pending",
+        "passed",
+        "failed",
+        "unavailable",
+        "user_action_required"
+      ]
+    },
+    "sudo": {
+      "enum": [
+        "pending",
+        "passed",
+        "failed",
+        "unavailable",
+        "user_action_required"
+      ]
+    },
+    "cli": {
+      "enum": [
+        "pending",
+        "passed",
+        "failed",
+        "unavailable",
+        "user_action_required"
+      ]
+    },
+    "sftp_roundtrip": {
+      "enum": [
+        "pending",
+        "passed",
+        "failed",
+        "unavailable",
+        "user_action_required"
+      ]
+    },
+    "claude_auth": {
+      "enum": [
+        "pending",
+        "passed",
+        "failed",
+        "unavailable",
+        "user_action_required"
+      ]
+    },
+    "real_task": {
+      "enum": [
+        "pending",
+        "passed",
+        "failed",
+        "unavailable",
+        "user_action_required"
+      ]
+    }
+  }
+}

@@ -1,0 +1,52 @@
+name: Bootstrap validation
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /*
+            !/deployment/
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: '3.13'
+      - name: Keep real device credentials out of the test checkout
+        shell: bash
+        run: test ! -e deployment/device-bundle.zip
+      - name: Parse PowerShell sources
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $failed = $false
+          foreach ($path in @('bootstrap.ps1', 'scripts/windows.ps1')) {
+            $tokens = $null; $errors = $null
+            [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
+            if ($errors.Count) { $errors | Format-List; $failed = $true }
+          }
+          if ($failed) { exit 1 }
+      - name: Native entry point contracts
+        run: python tests/test_bootstrap.py -v
+      - name: Windows PowerShell 5.1 compatibility
+        if: runner.os == 'Windows'
+        env:
+          TEST_POWERSHELL: powershell
+        run: python tests/test_bootstrap.py -v
+      - name: Bash syntax
+        if: runner.os != 'Windows'
+        shell: bash
+        run: bash -n bootstrap.sh scripts/unix.sh
+      - name: ShellCheck
+        if: runner.os == 'Linux'
+        run: shellcheck -S warning bootstrap.sh scripts/unix.sh
