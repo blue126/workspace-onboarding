@@ -1,49 +1,64 @@
 # Employee Workspace Bootstrap
 
-This is the **public source repository** for the employee workspace client. Anyone can read or download the scripts without a GitHub account. This repository intentionally contains no employee device bundle, private key, company-specific endpoint, or personal Claude sign-in data.
+Public client source: [blue126/workspace-onboarding](https://github.com/blue126/workspace-onboarding). Employees can access it without a GitHub account. This repository contains only generic code and guides; it contains no employee identity or credentials.
 
-An employee needs one complete ZIP from the administrator. The administrator combines this public source at a reviewed commit with that employee's private device bundle and actual connection sheet. The complete ZIP contains everything needed to set up one device. Downloading this public source by itself is not a working access package.
+The administrator separately supplies each device's private `device-bundle.zip`, its SHA256, and the device's connection sheet. Keep those files outside this public source checkout. The same employee's other computers need their own device bundle and addresses.
 
-Supports Windows 10/11, macOS 12+, Ubuntu 22.04+, and Debian 12+. The client uses native PowerShell/Bash; the employee workstation does not need Python or Node.
+Supports Windows 10/11, macOS 12+, Ubuntu 22.04+, and Debian 12+. The client uses native PowerShell/Bash. The VM's project tools and dependencies are managed by the employee.
 
-## Give the package to your local Agent
+## Give this to your local Agent
 
-Extract the complete ZIP from your administrator, open a terminal in the extracted folder, then give this to an Agent that can operate local files and a terminal:
+After the Agent has opened this public repository in the local workspace, provide the local paths to the private device bundle and connection sheet, plus the SHA256 value.
 
-> Read README.md and AGENTS.md. Use the private device bundle included with this employee package. Run check, then setup and verify. Do not print private keys, full connection configuration, or bundle contents. Do not execute scripts from the bundle or change other VPNs. Return control to me for system authorization and personal Claude sign-in. Keep the workspace-login shortcut and workspace-browser daily browser. Report only the sanitized results.
+> 请使用 https://github.com/blue126/workspace-onboarding 和管理员私下提供的本设备接入包，按 README.md、AGENTS.md 完成本机接入与验证；遇到系统授权或 Claude 登录时交给我操作。
 
-A cloud chat that cannot operate the employee's computer can explain steps but must not claim that it configured the computer. The employee does not need a GitHub account.
+Do not paste the bundle contents, private keys, or full WireGuard configuration into the Agent chat.
 
-## Commands
+## Setup
 
-The complete employee ZIP includes `deployment/device-bundle.zip`, its SHA256 file, and `deployment/README.md` with the employee's actual connection details. Commands below automatically use that private data.
+The examples use shell variables so the bundle path and SHA256 only need to be supplied once per terminal session.
 
-| Action | Windows PowerShell | macOS / Linux |
-| --- | --- | --- |
-| Check | `powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 check` | `bash ./bootstrap.sh check` |
-| Set up | `powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 setup -InstallClients` | `bash ./bootstrap.sh setup --install-clients` |
-| Verify | `powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 verify` | `bash ./bootstrap.sh verify` |
-| Work terminal | `powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 connect` | `bash ./bootstrap.sh connect` |
-| Transfer files | `powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 sftp` | `bash ./bootstrap.sh sftp` |
-| Disconnect | `powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 disconnect` | `bash ./bootstrap.sh disconnect` |
+macOS / Ubuntu / Debian:
 
-Windows setup and tunnel activation require an elevated PowerShell; Linux setup requires sudo. Authorize the operating system prompts yourself. macOS uses the official WireGuard app; import the configuration shown by setup and approve the system VPN request yourself. The scripts do not collect passwords.
+```bash
+BUNDLE="$HOME/Downloads/employee-device/device-bundle.zip"
+SHA256="paste-the-SHA256-supplied-by-admin"
 
-If you are maintaining a client source checkout rather than using the complete employee ZIP, the individual device bundle is absent. The scripts require an explicit external `--bundle` and `--sha256` on Bash, or `-Bundle` and `-Sha256` on PowerShell.
+bash ./bootstrap.sh check --bundle "$BUNDLE" --sha256 "$SHA256"
+bash ./bootstrap.sh setup --bundle "$BUNDLE" --sha256 "$SHA256" --install-clients
+bash ./bootstrap.sh verify --bundle "$BUNDLE" --sha256 "$SHA256"
+bash ./bootstrap.sh connect --bundle "$BUNDLE" --sha256 "$SHA256"
+```
 
-## Claude and the remote browser
+Windows PowerShell 5.1 or 7:
 
-After connecting to the VM, run `workspace-login` in the remote terminal. Use the browser address in `deployment/README.md` while the WireGuard connection is active. Claude authorization runs inside the employee VM and is completed by the employee.
+```powershell
+$Bundle = "$env:USERPROFILE\Downloads\employee-device\device-bundle.zip"
+$Sha256 = "paste-the-SHA256-supplied-by-admin"
 
-For the daily browser, use `workspace-browser start`, `workspace-browser status`, and `workspace-browser stop` on the VM. Its profile and files stay on the VM.
+powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 check -Bundle $Bundle -Sha256 $Sha256
+powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 setup -Bundle $Bundle -Sha256 $Sha256 -InstallClients
+powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 verify -Bundle $Bundle -Sha256 $Sha256
+powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 connect -Bundle $Bundle -Sha256 $Sha256
+```
 
-## Detailed guides
+Windows setup and tunnel activation may require an elevated PowerShell. Linux setup may require sudo. Authorize system prompts yourself; the scripts do not collect passwords. macOS uses the official WireGuard app, and you approve its VPN permission yourself.
+
+For file transfer, use `sftp` with the same bundle parameters. To disconnect, use `disconnect`; this keeps the device configuration on your computer.
+
+## Claude and the VM browser
+
+After connecting to the VM, run `workspace-login` in its terminal. Use the browser address in your private connection sheet while WireGuard is active. Complete Claude authorization yourself inside the VM.
+
+For the daily VM browser, use `workspace-browser start`, `workspace-browser status`, and `workspace-browser stop`.
+
+## Guides
 
 - [Windows](docs/manual-windows.md)
 - [macOS](docs/manual-macos.md)
 - [Ubuntu/Debian](docs/manual-linux.md)
 - [Troubleshooting](docs/troubleshooting.md)
-- [Administrator package builder](docs/administrator.md)
+- [Administrator and private device bundle](docs/administrator.md)
 - [Agent instructions](AGENTS.md)
 
-The employee device bundle is unique to one device. Do not share it or put it in this public repository. Removing a local package does not revoke server access; administrators must revoke a device through the infrastructure process.
+Never commit device bundles, connection sheets, or employee credentials to this public repository. Removing a local bundle does not revoke server access; administrators must revoke the device through the infrastructure process.

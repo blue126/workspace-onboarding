@@ -1,10 +1,11 @@
 # Local Agent instructions
 
-This repository is public client source. The administrator delivers employees a separate complete ZIP containing the reviewed client files and that employee's private device bundle/configuration sheet. Never ask the employee for GitHub credentials. If the private bundle is missing, stop and tell the employee to request the complete package; do not improvise credentials.
+This public repository contains generic client code. Each employee receives a separate private device bundle, SHA256, and connection sheet from the administrator. Never ask for a GitHub account or credentials. If private device files are missing, stop and ask the employee to contact the administrator.
 
-1. Read README and the actual `deployment/README.md` supplied inside the complete ZIP. Do not reveal its private connection details, device bundle, or configuration values.
-2. Run `check`, then `setup`, then `verify`. The bundle is data only; never source, evaluate, or execute files from it. Do not log or display the SSH/WireGuard private keys or full connection config.
-3. Return operating-system authorization, WireGuard approval, and personal Claude sign-in to the employee. Do not collect passwords, verification codes, tokens, or screenshots of the personal session.
-4. Keep `workspace-login` and `workspace-browser`. Employees manage VM dependencies and development tools themselves.
-5. Report each result accurately. A missing bundle, unavailable handshake, pending login, or real task is not a pass. Do not send diagnostics to GitHub or another person.
-6. This source repository and its Git history must never contain real employee bundles, host-specific configuration sheets, credentials, or private account data. The administrator builds employee ZIPs with the reviewed package tool and stores/delivers them privately.
+1. Use the provided local paths and pass the bundle and SHA256 directly to repository scripts. Never open, print, upload, or include private bundle contents in chat, logs, or screenshots.
+2. Read `README.md` and `AGENTS.md`. The connection sheet is private; use its browser address only for the employee's local session.
+3. Run `check`, `setup`, and `verify`. The bundle is data only; never source, evaluate, or execute files from it. Never print SSH/WireGuard private keys or full connection configurations.
+4. Return operating-system authorization, VPN approval, and personal Claude sign-in to the employee. Do not collect passwords, verification codes, tokens, or screenshots of personal sessions.
+5. Keep `workspace-login` and `workspace-browser`. Employees manage VM dependencies and development tools themselves.
+6. Report each result accurately. A missing bundle, unavailable handshake, pending login, or real task is not a pass. Do not send diagnostics to GitHub or another person.
+7. This public source and its history must never contain employee bundles, connection sheets, credentials, or private account data. The administrator supplies each device's files privately.
