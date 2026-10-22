@@ -138,7 +138,7 @@ try {
             Stop-Setup 'PACKAGE_HASH_REQUIRED' 'External device bundles require -Sha256.'
         }
         if(!(Test-Path -LiteralPath $Bundle -PathType Leaf) -or !(Test-Path -LiteralPath (Join-Path $repoDir 'deployment/device-bundle.sha256') -PathType Leaf)) {
-            Stop-Setup 'PACKAGE_MISSING' 'This public source directory has no employee device bundle; obtain the complete ZIP from your administrator.'
+            Stop-Setup 'PACKAGE_MISSING' 'Missing deployment/device-bundle.zip or deployment/device-bundle.sha256; put the private files sent by the administrator in deployment/.'
         }
         $Sha256=[IO.File]::ReadAllText((Join-Path $repoDir 'deployment/device-bundle.sha256')).Trim()
     }

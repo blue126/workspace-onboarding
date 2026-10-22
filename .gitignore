@@ -4,6 +4,7 @@ __pycache__/
 .local-state/
 test-results/
 
-# Per-employee identity bundles and assembled deliveries must stay private.
-/deployment/
+# Private employee identity files are local only.
+/deployment/*
+!/deployment/.gitkeep
 *.zip

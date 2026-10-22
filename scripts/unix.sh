@@ -73,7 +73,7 @@ hash_file() {
 }
 if [[ -z "$expected_sha" ]]; then
     [[ "$bundle" == "$repo_dir/deployment/device-bundle.zip" ]] || fail PACKAGE_HASH_REQUIRED "external package must provide --sha256."
-    [[ -f "$bundle" && -f "$repo_dir/deployment/device-bundle.sha256" ]] || fail PACKAGE_MISSING "Public source has no employee bundle; get the complete ZIP from your administrator."
+    [[ -f "$bundle" && -f "$repo_dir/deployment/device-bundle.sha256" ]] || fail PACKAGE_MISSING "缺少 deployment/device-bundle.zip 或 deployment/device-bundle.sha256；请将管理员私下发来的本设备文件放入 deployment/。"
     expected_sha="$(tr -d '\r\n' < "$repo_dir/deployment/device-bundle.sha256")"
 fi
 [[ "$expected_sha" =~ ^[a-f0-9]{64}$ ]] || fail PACKAGE_HASH_INVALID "设备包摘要格式无效。"

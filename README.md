@@ -1,54 +1,54 @@
 # Employee Workspace Bootstrap
 
-Public client source: [blue126/workspace-onboarding](https://github.com/blue126/workspace-onboarding). Employees can access it without a GitHub account. This repository contains only generic code and guides; it contains no employee identity or credentials.
+Public client source: [blue126/workspace-onboarding](https://github.com/blue126/workspace-onboarding). Employees can access it without a GitHub account. This repository contains generic code only; it contains no employee identity or credentials.
 
-The administrator separately supplies each device's private `device-bundle.zip`, its SHA256, and the device's connection sheet. Keep those files outside this public source checkout. The same employee's other computers need their own device bundle and addresses.
+The administrator sends each device package, SHA256, and actual connection sheet privately. The employee saves those files in the local `deployment/` folder; the Agent finds them by their fixed names.
 
-Supports Windows 10/11, macOS 12+, Ubuntu 22.04+, and Debian 12+. The client uses native PowerShell/Bash. The VM's project tools and dependencies are managed by the employee.
+- `deployment/device-bundle.zip`
+- `deployment/device-bundle.sha256`
+- `deployment/README.md` (the private connection sheet)
+
+These local files are ignored by Git and must never be committed. Each computer gets its own device bundle and addresses, including additional computers used by the same employee.
+
+Supports Windows 10/11, macOS 12+, Ubuntu 22.04+, and Debian 12+. VM project tools and dependencies are managed by the employee.
 
 ## Give this to your local Agent
 
-After the Agent has opened this public repository in the local workspace, provide the local paths to the private device bundle and connection sheet, plus the SHA256 value.
+If the public project is not already open locally, ask the Agent to clone it into a new `workspace-onboarding` folder in its current working directory. The public repository can be cloned without a GitHub account. Then save the three private files sent by the administrator into that clone’s `deployment/` folder.
 
-> 请使用 https://github.com/blue126/workspace-onboarding 和管理员私下提供的本设备接入包，按 README.md、AGENTS.md 完成本机接入与验证；遇到系统授权或 Claude 登录时交给我操作。
+> 请先克隆 https://github.com/blue126/workspace-onboarding 到本机，再让我把管理员私发的本设备文件放入项目 deployment/，然后按 README.md/AGENTS.md 完成接入；系统授权和 Claude 登录交给我。
 
-Do not paste the bundle contents, private keys, or full WireGuard configuration into the Agent chat.
+Never paste bundle contents, private keys, or full WireGuard configuration into the Agent chat. If a file is missing, report its name and stop; the employee can follow up with the administrator.
 
 ## Setup
 
-The examples use shell variables so the bundle path and SHA256 only need to be supplied once per terminal session.
+All commands automatically use the files in `deployment/`; do not add the device bundle or SHA256 to command arguments.
 
 macOS / Ubuntu / Debian:
 
 ```bash
-BUNDLE="$HOME/Downloads/employee-device/device-bundle.zip"
-SHA256="paste-the-SHA256-supplied-by-admin"
-
-bash ./bootstrap.sh check --bundle "$BUNDLE" --sha256 "$SHA256"
-bash ./bootstrap.sh setup --bundle "$BUNDLE" --sha256 "$SHA256" --install-clients
-bash ./bootstrap.sh verify --bundle "$BUNDLE" --sha256 "$SHA256"
-bash ./bootstrap.sh connect --bundle "$BUNDLE" --sha256 "$SHA256"
+bash ./bootstrap.sh check
+bash ./bootstrap.sh setup --install-clients
+bash ./bootstrap.sh verify
+bash ./bootstrap.sh connect
 ```
 
 Windows PowerShell 5.1 or 7:
 
 ```powershell
-$Bundle = "$env:USERPROFILE\Downloads\employee-device\device-bundle.zip"
-$Sha256 = "paste-the-SHA256-supplied-by-admin"
-
-powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 check -Bundle $Bundle -Sha256 $Sha256
-powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 setup -Bundle $Bundle -Sha256 $Sha256 -InstallClients
-powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 verify -Bundle $Bundle -Sha256 $Sha256
-powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 connect -Bundle $Bundle -Sha256 $Sha256
+powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 check
+powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 setup -InstallClients
+powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 verify
+powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 connect
 ```
 
-Windows setup and tunnel activation may require an elevated PowerShell. Linux setup may require sudo. Authorize system prompts yourself; the scripts do not collect passwords. macOS uses the official WireGuard app, and you approve its VPN permission yourself.
+Windows setup and tunnel activation may require an elevated PowerShell. Linux setup may require sudo. Approve system prompts yourself; the scripts do not collect passwords. macOS uses the official WireGuard app, and you approve its VPN permission yourself.
 
-For file transfer, use `sftp` with the same bundle parameters. To disconnect, use `disconnect`; this keeps the device configuration on your computer.
+For file transfer, use `sftp`. To disconnect, use `disconnect`; this keeps the device configuration on your computer.
 
 ## Claude and the VM browser
 
-After connecting to the VM, run `workspace-login` in its terminal. Use the browser address in your private connection sheet while WireGuard is active. Complete Claude authorization yourself inside the VM.
+After connecting to the VM, run `workspace-login` in its terminal. Use the browser address in the private `deployment/README.md` connection sheet while WireGuard is active. Complete Claude authorization yourself inside the VM.
 
 For the daily VM browser, use `workspace-browser start`, `workspace-browser status`, and `workspace-browser stop`.
 
@@ -61,4 +61,4 @@ For the daily VM browser, use `workspace-browser start`, `workspace-browser stat
 - [Administrator and private device bundle](docs/administrator.md)
 - [Agent instructions](AGENTS.md)
 
-Never commit device bundles, connection sheets, or employee credentials to this public repository. Removing a local bundle does not revoke server access; administrators must revoke the device through the infrastructure process.
+Deleting local files does not revoke server access. Administrators must revoke a device through the infrastructure process.
