@@ -273,6 +273,13 @@ elif name=="ip":
         self.bundle()
         self.call("setup", code="PACKAGE_TOO_LARGE" if not WINDOWS else "PACKAGE_UNSAFE")
 
+    def test_email_username_device_id_needs_no_prefix(self):
+        self.manifest['device_id']='zhang171903992'
+        self.data['manifest.json']=json.dumps(self.manifest).encode()
+        self.bundle()
+        self.setup()
+        installed=self.state/'zhang171903992'
+        self.assertIn('User zhang171903992',(installed/'ssh_config').read_text())
     def test_setup_is_idempotent_and_private(self):
         self.setup()
         installed=self.state/self.manifest["device_id"]

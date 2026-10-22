@@ -204,7 +204,7 @@ try {
         if(!$manifest.PSObject.Properties[$field] -or [string]$manifest.$field -match '[\r\n]') { Stop-Setup 'MANIFEST_INVALID' 'Missing or invalid manifest field.' }
     }
     if($manifest.schema_version -ne 1 -or $manifest.tool_version -cne '1.0.0') { Stop-Setup 'PACKAGE_VERSION_UNSUPPORTED' 'Unsupported bundle version.' }
-    if($manifest.device_id -cnotmatch '^ed-[a-z0-9-]{1,25}$' -or $manifest.vm_hostname -cnotmatch '^employee-[a-z0-9-]{1,40}$' -or
+    if($manifest.device_id -cnotmatch '^[a-z][a-z0-9-]{0,27}$' -or $manifest.vm_hostname -cnotmatch '^employee-[a-z0-9-]{1,40}$' -or
        $manifest.tunnel_name -cnotmatch '^ws-[a-f0-9]{8}$' -or $manifest.wireguard_address -cnotmatch '/32$' -or
        !(Valid-Ip $manifest.ssh_gateway) -or !(Valid-Ip $manifest.wireguard_endpoint) -or
        !(Valid-Ip ($manifest.wireguard_address -replace '/32$','')) -or

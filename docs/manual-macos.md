@@ -4,7 +4,7 @@
 2. Agent 从公开 GitHub 取得项目，并从私人共享下载三份设备文件。下载无需登录 OneDrive；若要求登录或链接已过期，请管理员重发免登录链接。
 3. 首选保存位置：`~/Downloads/employee-workspace/`。文件名必须为 device-bundle.zip、device-bundle.sha256、README.md。
 4. 首选目录没有设备文件时，Agent 可提示你把文件放在已下载项目的 deployment/；首选文件校验失败时不能改用另一份身份。
-5. Agent 按项目 README 执行 check、setup、verify、connect；使用 CLI 自动安装、生成配置并启用隧道，不需要 App 导入。sudo 授权由本人在交互终端完成。
+5. Agent 按项目 README 执行 check、setup、verify、connect；使用 CLI 自动安装、生成配置并启用隧道，不需要 App 导入。由 Agent 创建交互终端并执行配置，本人只输入 sudo 密码，按 [系统授权](system-authorization.md) 继续。
 6. 先通过 SSH 进入 VM，依次运行 workspace-browser start、workspace-login；浏览器就绪后再打开 noVNC，在 VM Firefox 中由本人完成 Claude 授权。日常使用 workspace-browser start/status/stop，文件传输用 sftp。
 
 项目源码：`~/EmployeeWorkspace/onboarding/`。setup 的运行配置默认在 `~/EmployeeWorkspace/devices/<device_id>/`，可以从个人主目录直接找到。已有旧配置保留，参见 README 的旧目录说明。

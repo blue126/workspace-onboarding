@@ -144,7 +144,7 @@ else
 fi
 [[ "$actual_fields" == "$expected_fields" ]] || fail MANIFEST_INVALID "Unexpected manifest fields."
 [[ "$schema" == 1 && "$tool_version" == 1.0.0 ]] || fail PACKAGE_VERSION_UNSUPPORTED "设备包版本与工具不匹配。"
-[[ "$device" =~ ^ed-[a-z0-9-]{1,25}$ && "$vm_hostname" =~ ^employee-[a-z0-9-]{1,40}$ &&
+[[ "$device" =~ ^[a-z][a-z0-9-]{0,27}$ && "$vm_hostname" =~ ^employee-[a-z0-9-]{1,40}$ &&
    "$tunnel" =~ ^ws-[a-f0-9]{8}$ && "$peer" =~ ^[A-Za-z0-9+/]{43}=$ &&
    "$client_public" =~ ^[A-Za-z0-9+/]{43}=$ ]] || fail MANIFEST_INVALID "设备或公钥格式无效。"
 valid_ip() {

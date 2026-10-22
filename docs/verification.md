@@ -9,7 +9,7 @@
 | 验证 | `bash ./bootstrap.sh verify` | `powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 verify` |
 | 进入 VM | `bash ./bootstrap.sh connect` | `powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 connect` |
 
-setup/verify 需要本人可授权的交互终端；Windows 使用已批准的管理员 PowerShell。不要把密码发给 Agent。
+由 Agent 按 [系统授权](system-authorization.md) 创建可交互终端并依次执行 setup、verify；员工只输入密码/确认 UAC，不手工复制整条命令。不要把密码发给 Agent。
 
 ## 预期结果
 

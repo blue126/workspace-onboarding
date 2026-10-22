@@ -76,6 +76,7 @@ VPN 使用 CLI：macOS 为 Homebrew wireguard-tools，Linux 为 wg-quick，Windo
 - [Ubuntu/Debian](docs/manual-linux.md)
 - [标准验证：固定命令与预期结果](docs/verification.md)
 - [验证后的必含信息](docs/after-verify.md)
+- [系统授权](docs/system-authorization.md)
 - [故障处理](docs/troubleshooting.md)
 - [设备文件交付约定](docs/administrator.md)
 
