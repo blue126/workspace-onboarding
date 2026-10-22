@@ -36,6 +36,7 @@ class Bootstrap(unittest.TestCase):
         self.bin.mkdir()
         self.source_root = ROOT
         self.default_bundle = False
+        self.default_state = False
         self.state = self.path / "private state"
         self.package = self.path / "fixture.zip"
         self.manifest = {
@@ -72,10 +73,10 @@ class Bootstrap(unittest.TestCase):
             shell = os.environ.get("TEST_POWERSHELL", "pwsh")
             bundle_args=[] if self.default_bundle else ["-Bundle", str(self.package), "-Sha256", self.digest]
             return [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(self.source_root/"bootstrap.ps1"),
-                    action, *bundle_args, "-StateRoot", str(self.state), *extra]
+                    action, *bundle_args, *([] if self.default_state else ["-StateRoot", str(self.state)]), *extra]
         bundle_args=[] if self.default_bundle else ["--bundle", str(self.package), "--sha256", self.digest]
         return ["/bin/bash", str(self.source_root/"bootstrap.sh"), action, *bundle_args,
-                "--state-root", str(self.state), *extra]
+                *([] if self.default_state else ["--state-root", str(self.state)]), *extra]
 
     def default_locations(self):
         self.default_bundle=True
@@ -97,6 +98,23 @@ class Bootstrap(unittest.TestCase):
         shutil.copyfile(self.package,directory/"device-bundle.zip")
         (directory/"device-bundle.sha256").write_text(self.digest+"\n")
         (directory/"README.md").write_text("Synthetic device connection sheet\n")
+
+    def test_default_install_uses_visible_user_directory_and_preserves_old_state(self):
+        primary,_=self.default_locations()
+        self.place_default_bundle(primary)
+        self.default_state=True
+        profile=Path(self.env["USERPROFILE"])
+        old=profile/"Library"/"Application Support"/"WorkspaceOnboarding"/"preserve.txt"
+        old.parent.mkdir(parents=True)
+        old.write_text("existing-user-config")
+        self.setup()
+        installed=profile/"EmployeeWorkspace"/"devices"/self.manifest["device_id"]
+        self.assertTrue((installed/"ssh_config").is_file())
+        self.assertIn(str(installed.resolve()).replace("\\","/"),(installed/"ssh_config").read_text())
+        self.assertEqual(old.read_text(),"existing-user-config")
+        before={p.name:p.read_bytes() for p in installed.iterdir()}
+        self.setup()
+        self.assertEqual(before,{p.name:p.read_bytes() for p in installed.iterdir()})
 
     def test_default_download_directory_has_priority(self):
         primary,fallback=self.default_locations()
@@ -155,23 +173,37 @@ p=pathlib.Path(os.environ["FIXTURE"]);args=sys.argv[1:];name=pathlib.Path(sys.ar
 m=json.loads((p/"manifest-test.json").read_text())
 with (p/"commands.jsonl").open("a") as f:f.write(json.dumps([name,args])+"\n")
 if name=="sudo":
+ if args==["-n","true"]:sys.exit(1 if os.environ.get("NEEDS_SUDO") else 0)
+ if args[:1]==["cat"] and args[1].startswith("/var/run/wireguard/"):
+  if not (p/"tunnel-active").exists():sys.exit(1)
+  print("utun9");sys.exit(0)
  os.execvp(args[0],args)
 if name=="ssh":
  assert args[-1]=="workspace" and "-tt" in args and len(args)==4,args
  data=sys.stdin.read()
  import re
- prefix=re.search(r"WS_[a-f0-9]+",data).group()
+ assert data.count("\n")==1 and "exec python3 -c" in data and "</dev/null" in data,data
+ encoded=re.search(r'base64.b64decode\("([A-Za-z0-9+/=]+)"\)',data).group(1)
+ import base64
+ decoded=base64.b64decode(encoded).decode()
+ prefix=re.search(r"WS_[a-f0-9]+",decoded).group()
  scenario=os.environ.get("SSH_SCENARIO","")
  if scenario=="host-key":
   print("Host key verification failed. PRIVATE_FAILURE_SENTINEL",file=sys.stderr);sys.exit(255)
- print(prefix+"_BEGIN")
+ def emit(line):
+  if scenario=="osc":line="\x1b]3008;context=fixture\x07\x1b[32m"+line+"\x1b[0m\x1b]133;D\x1b\\"
+  print(line)
+ emit(prefix+"_BEGIN")
  for key in ("USER","VM","SUDO","CLI","AUTH"):
+  if scenario=="missing-field" and key=="CLI":continue
   value="failed" if key=="VM" and scenario=="wrong-vm" else "passed"
   if key=="AUTH" and scenario=="pending":value="user_action_required"
-  print(prefix+"_"+key+"="+value)
- print(prefix+"_END")
+  if key=="AUTH" and scenario=="auth-invalid":value="unavailable"
+  emit(prefix+"_"+key+"="+value)
+  if key=="USER" and scenario=="duplicate":emit(prefix+"_USER=passed")
+ emit(prefix+"_END")
 elif name=="sftp":
- assert args[-1]=="workspace" and args[args.index("-s")+1]=="employee-sftp"
+ assert args[-1]=="workspace" and "-s" not in args,args
  lines=pathlib.Path(args[args.index("-b")+1]).read_text().splitlines()
  root=p/"remote";root.mkdir(exist_ok=True)
  def remote(value):return root/pathlib.PurePosixPath(value).relative_to("/tmp")
@@ -187,7 +219,7 @@ elif name=="sftp":
   else:raise AssertionError(a)
 elif name=="wg":
  if args==["show","interfaces"]:
-  print(m["tunnel_name"] if (p/"tunnel-active").exists() else "")
+  print(("utun9" if sys.platform=="darwin" else m["tunnel_name"]) if (p/"tunnel-active").exists() else "")
  elif args[-1]=="public-key":print("wrong" if os.environ.get("WRONG_TUNNEL") else m["client_wireguard_public_key"])
  elif args[-1]=="peers":print(m["wireguard_public_key"])
  elif args[-1]=="allowed-ips":print(m["wireguard_public_key"]+"\t"+m["ssh_gateway"]+"/32")
@@ -197,6 +229,17 @@ elif name=="wg-quick":
  if args[0]=="up":(p/"tunnel-active").touch()
  elif args[0]=="down":(p/"tunnel-active").unlink()
  else:raise AssertionError(args)
+elif name=="wireguard-go":sys.exit(0)
+elif name=="ifconfig":
+ if args==["-a"]:
+  print("inet "+m["wireguard_address"].split("/")[0] if os.environ.get("ADDRESS_CONFLICT") else "inet 127.0.0.1")
+ else:
+  assert args==["utun9"],args
+  print("inet "+m["wireguard_address"].split("/")[0]+" netmask 0xffffffff")
+elif name=="route":
+ assert args==["-n","get",m["ssh_gateway"]],args
+ print("destination: "+(m["ssh_gateway"] if os.environ.get("ROUTE_CONFLICT") else "default"))
+ print("interface: "+("utun8" if os.environ.get("ROUTE_CONFLICT") else "en0"))
 elif name=="ip":
  if args[:4]==["-o","-4","addr","show"]:print("2: "+m["tunnel_name"]+" inet "+m["wireguard_address"])
  elif args[:4]==["-4","route","show","match"]:
@@ -204,7 +247,7 @@ elif name=="ip":
  else:raise AssertionError(args)
 '''
         (self.path/"manifest-test.json").write_text(json.dumps(self.manifest))
-        for name in ("ssh", "sftp", "sudo", "wg", "wg-quick", "ip"):
+        for name in ("ssh", "sftp", "sudo", "wg", "wg-quick", "ip", "wireguard-go", "ifconfig", "route"):
             path = self.bin/name
             path.write_text("#!"+sys.executable+"\n"+dispatch)
             path.chmod(0o755)
@@ -283,16 +326,34 @@ elif name=="ip":
         for key in ("ssh_identity","assigned_vm","sudo","cli","sftp_roundtrip","claude_auth"):self.assertEqual(r[key],"passed")
         self.assertEqual(list((self.path/"remote").iterdir()),[])
 
+    @unittest.skipIf(WINDOWS, "Unix terminal framing")
+    def test_verify_accepts_osc_bel_st_and_csi_without_shell_changes(self):
+        self.setup();(self.path/"tunnel-active").touch();self.env["SSH_SCENARIO"]="osc"
+        self.call("verify",code="CONNECTION_VERIFIED")
+
+    @unittest.skipIf(WINDOWS, "Unix terminal framing")
+    def test_duplicate_or_missing_records_stop_instead_of_claiming_success(self):
+        self.setup();(self.path/"tunnel-active").touch()
+        for scenario in ("duplicate","missing-field"):
+            self.env["SSH_SCENARIO"]=scenario
+            self.call("verify",code="SSH_PROTOCOL_FAILED")
+
+    @unittest.skipIf(WINDOWS, "Unix auth-check failure")
+    def test_broken_auth_check_is_not_misreported_as_logged_out(self):
+        self.setup();(self.path/"tunnel-active").touch();self.env["SSH_SCENARIO"]="auth-invalid"
+        _,report=self.call("verify",code="CLAUDE_AUTH_CHECK_FAILED")
+        self.assertEqual(report["claude_auth"],"unavailable")
+
     @unittest.skipIf(WINDOWS, "Unix command transport fixture")
     def test_wrong_vm_stops_before_sftp(self):
-        self.setup();self.env["SSH_SCENARIO"]="wrong-vm"
+        self.setup();(self.path/"tunnel-active").touch();self.env["SSH_SCENARIO"]="wrong-vm"
         self.call("verify",code="WORKSPACE_ID_MISMATCH")
         calls=[json.loads(x)[0] for x in (self.path/"commands.jsonl").read_text().splitlines()]
         self.assertNotIn("sftp",calls)
 
     @unittest.skipIf(WINDOWS, "Unix command transport fixture")
     def test_host_key_failure_is_sanitized(self):
-        self.setup();self.env["SSH_SCENARIO"]="host-key"
+        self.setup();(self.path/"tunnel-active").touch();self.env["SSH_SCENARIO"]="host-key"
         self.call("verify",code="SSH_HOST_KEY_MISMATCH")
 
     @unittest.skipIf(WINDOWS, "Unix command transport fixture")
@@ -302,24 +363,47 @@ elif name=="ip":
         _,r=self.call("verify",code="CLAUDE_AUTH_USER_PENDING")
         self.assertEqual(r["real_task"],"pending")
 
-    @unittest.skipIf(WINDOWS or sys.platform=="darwin", "Linux route/tunnel behavior")
+    @unittest.skipIf(WINDOWS, "Unix CLI route/tunnel behavior")
     def test_route_conflict_not_changed(self):
         self.env["ROUTE_CONFLICT"]="1"
         self.call("setup",code="ROUTE_CONFLICT")
         self.assertFalse((self.path/"tunnel-active").exists())
 
-    @unittest.skipIf(WINDOWS or sys.platform=="darwin", "Linux route/tunnel behavior")
+    @unittest.skipIf(WINDOWS, "Unix CLI route/tunnel behavior")
     def test_foreign_tunnel_not_stopped(self):
         self.setup();(self.path/"tunnel-active").touch();self.env["WRONG_TUNNEL"]="1"
         self.call("disconnect",code="TUNNEL_CONFLICT")
         self.assertTrue((self.path/"tunnel-active").exists())
 
-    @unittest.skipIf(WINDOWS or sys.platform=="darwin", "Linux handshake behavior")
+    @unittest.skipIf(WINDOWS, "Unix CLI handshake behavior")
     def test_stale_handshake_not_passed(self):
         self.setup();(self.path/"tunnel-active").touch();self.env["STALE_WG"]="1"
         self.call("verify",code="NO_RECENT_HANDSHAKE")
 
-    @unittest.skipIf(WINDOWS or sys.platform=="darwin", "Linux route/tunnel behavior")
+    @unittest.skipUnless(sys.platform=="darwin", "macOS CLI interface mapping")
+    def test_macos_cli_uses_runtime_utun_mapping_and_is_idempotent(self):
+        self.call("setup",code="CONFIGURED")
+        self.call("setup",code="CONFIGURED")
+        calls=[json.loads(line) for line in (self.path/"commands.jsonl").read_text().splitlines()]
+        ups=[args for name,args in calls if name=="wg-quick" and args[0]=="up"]
+        self.assertEqual(len(ups),1)
+        queries=[args for name,args in calls if name=="wg" and args[-1]=="public-key"]
+        self.assertTrue(queries)
+        self.assertTrue(all(args[1]=="utun9" for args in queries))
+
+    @unittest.skipUnless(sys.platform=="darwin", "macOS GUI address conflict")
+    def test_existing_gui_address_is_not_taken_over(self):
+        self.env["ADDRESS_CONFLICT"]="1"
+        self.call("setup",code="ROUTE_CONFLICT")
+        self.assertFalse((self.path/"tunnel-active").exists())
+
+    @unittest.skipIf(WINDOWS, "Unix sudo handoff")
+    def test_noninteractive_sudo_handoff_does_not_start_tunnel(self):
+        self.env["NEEDS_SUDO"]="1"
+        self.call("setup",code="NEEDS_ADMIN")
+        self.assertFalse((self.path/"tunnel-active").exists())
+
+    @unittest.skipIf(WINDOWS, "Unix CLI route/tunnel behavior")
     def test_only_owned_tunnel_started_and_stopped(self):
         self.call("setup",code="CONFIGURED")
         self.assertTrue((self.path/"tunnel-active").exists())

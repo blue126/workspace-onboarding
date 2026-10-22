@@ -6,6 +6,7 @@ export LC_ALL=C
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 platform=unsupported
 case "$(uname -s)" in Darwin) platform=macos ;; Linux) platform=linux ;; esac
+if [[ "$platform" == macos ]]; then export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"; fi
 action="${1:-check}"
 [[ $# -eq 0 ]] || shift
 bundle=""
@@ -43,6 +44,13 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 case "$action" in check|setup|verify|connect|sftp|disconnect) ;; *) fail INVALID_ACTION "动作：check/setup/verify/connect/sftp/disconnect。" ;; esac
+if $install_clients; then [[ "$action" == setup ]] || fail INVALID_ARGUMENT "只有 setup 可以安装客户端。"; fi
+require_tunnel_admin() {
+    if ! sudo -n true >/dev/null 2>&1; then
+        [[ -t 0 && -t 2 ]] || fail NEEDS_ADMIN "请在本人可输入密码的交互终端运行同一条命令；不要把 sudo 密码发给 Agent，也不要仅在另一终端运行 sudo -v。"
+        sudo -v || fail NEEDS_ADMIN "需要本人完成 sudo 授权。"
+    fi
+}
 if [[ -z "$bundle" ]]; then
     primary_dir="$HOME/Downloads/employee-workspace"
     fallback_dir="$repo_dir/deployment"
@@ -77,6 +85,7 @@ if [[ "$platform" == linux ]]; then
         command -v unzip >/dev/null || missing+=(unzip)
         command -v ip >/dev/null || missing+=(iproute2)
         if [[ ${#missing[@]} -gt 0 ]]; then
+            require_tunnel_admin
             sudo apt-get update >/dev/null 2>&1 &&
                 sudo apt-get install -y "${missing[@]}" >/dev/null 2>&1 ||
                 fail INSTALL_FAILED "客户端安装失败，请检查 sudo 授权和软件源。"
@@ -159,8 +168,7 @@ wg_private="$(tr -d '\r\n' < "$stage/wg.key")"
 [[ "$wg_private" =~ ^[A-Za-z0-9+/]{43}=$ ]] || fail KEY_INVALID "WireGuard 密钥格式无效。"
 package_verified=true
 if [[ -z "$state_root" ]]; then
-    if [[ "$platform" == macos ]]; then state_root="$HOME/Library/Application Support/WorkspaceOnboarding"
-    else state_root="$HOME/.local/share/workspace-onboarding"; fi
+    state_root="$HOME/EmployeeWorkspace/devices"
 fi
 [[ "$state_root" == /* && "$state_root" != *'"'* && "$state_root" != *'%'* &&
     "$state_root" != *$'\n'* && "$state_root" != *$'\r'* ]] ||
@@ -178,11 +186,20 @@ if [[ -d "$state_root" ]]; then
     [[ ! -L "$state_root" && "$(ls -nd "$state_root" | awk '{print $3}')" == "$(id -u)" ]] ||
         fail STATE_PATH_UNSAFE "State directory owner or type mismatch."
 fi
-if [[ "$platform" == macos ]]; then
-    [[ -d /Applications/WireGuard.app ]] && client_ready=true
-else
-    if command -v wg >/dev/null && command -v wg-quick >/dev/null && command -v ip >/dev/null; then client_ready=true; fi
+if [[ "$platform" == macos ]] && $install_clients; then
+    if ! command -v wg >/dev/null || ! command -v wg-quick >/dev/null || ! command -v wireguard-go >/dev/null; then
+        command -v brew >/dev/null || fail HOMEBREW_REQUIRED "请按 docs/manual-macos.md 安装 Homebrew，再重跑相同命令。"
+        brew install wireguard-tools >/dev/null 2>&1 || fail INSTALL_FAILED "WireGuard CLI 安装失败；检查 Homebrew 安装结果。"
+    fi
 fi
+wg_bin="$(command -v wg || true)"
+wg_quick_bin="$(command -v wg-quick || true)"
+if [[ -n "$wg_bin" && -n "$wg_quick_bin" ]]; then
+    if [[ "$platform" == macos ]]; then
+        command -v wireguard-go >/dev/null && client_ready=true
+    elif command -v ip >/dev/null; then client_ready=true; fi
+fi
+wg_interface=""
 write_configs() {
     cat > "$stage/$tunnel.conf" <<EOF
 [Interface]
@@ -232,14 +249,71 @@ require_installed() {
             cmp -s "$stage/$file" "$state/$file" || fail CONFIG_CONFLICT "Installed configuration differs; nothing overwritten."
     done
 }
+run_bounded() {
+    local seconds="$1" command_pid watcher status
+    shift
+    mkfifo "$stage/deadline"
+    exec 9<>"$stage/deadline"
+    exec 8<&0
+    "$@" <&8 &
+    command_pid=$!
+    (
+        if ! IFS= read -r -t "$seconds" -u 9; then
+            : > "$stage/timed-out"
+            kill -KILL "$command_pid" 2>/dev/null || true
+        fi
+    ) &
+    watcher=$!
+    if wait "$command_pid"; then status=0; else status=$?; fi
+    printf 'done\n' >&9
+    wait "$watcher" || true
+    exec 8<&- 9>&-
+    rm -f "$stage/deadline"
+    [[ ! -e "$stage/timed-out" ]] || return 124
+    return "$status"
+}
+normalize_terminal() {
+    awk 'BEGIN {
+        esc=sprintf("%c",27); bell=sprintf("%c",7)
+        osc=esc "\\][^" esc bell "]*(" bell "|" esc "\\\\)"
+        csi=esc "\\[[0-?]*[ -/]*[@-~]"
+    } {gsub(osc, ""); gsub(csi, ""); gsub(/\r/, ""); print}'
+}
+resolve_tunnel_interface() {
+    local interfaces mapped
+    interfaces="$(sudo "$wg_bin" show interfaces 2>/dev/null)" || fail TUNNEL_INSPECTION_FAILED "无法读取 WireGuard 接口；未修改网络。"
+    if [[ "$platform" == macos ]]; then
+        # wg-quick owns this mapping; the GUI NetworkExtension has no such alias.
+        mapped="$(sudo cat "/var/run/wireguard/$tunnel.name" 2>/dev/null)" || return 1
+        [[ "$mapped" =~ ^utun[0-9]+$ ]] || return 1
+    else mapped="$tunnel"; fi
+    printf '%s\n' "$interfaces" | tr ' ' '\n' | awk -v target="$mapped" '$0==target {found=1} END {exit !found}' || return 1
+    wg_interface="$mapped"
+}
 owned_tunnel() {
     local actual actual_peer allowed current_address
-    actual="$(sudo wg show "$tunnel" public-key 2>/dev/null)" || return 1
-    actual_peer="$(sudo wg show "$tunnel" peers 2>/dev/null)" || return 1
-    allowed="$(sudo wg show "$tunnel" allowed-ips 2>/dev/null)" || return 1
-    current_address="$(ip -o -4 addr show dev "$tunnel" 2>/dev/null | awk '{print $4}')"
+    resolve_tunnel_interface || return 1
+    actual="$(sudo "$wg_bin" show "$wg_interface" public-key 2>/dev/null)" || return 1
+    actual_peer="$(sudo "$wg_bin" show "$wg_interface" peers 2>/dev/null)" || return 1
+    allowed="$(sudo "$wg_bin" show "$wg_interface" allowed-ips 2>/dev/null)" || return 1
+    if [[ "$platform" == macos ]]; then
+        current_address="$(ifconfig "$wg_interface" 2>/dev/null | awk '$1=="inet" {print $2 "/32"}')"
+    else current_address="$(ip -o -4 addr show dev "$wg_interface" 2>/dev/null | awk '{print $4}')"; fi
     [[ "$actual" == "$client_public" && "$actual_peer" == "$peer" &&
        "$allowed" == "$peer"$'\t'"$gateway/32" && "$current_address" == "$address" ]]
+}
+check_new_tunnel_route() {
+    local conflicting route_info destination
+    if [[ "$platform" == macos ]]; then
+        route_info="$(route -n get "$gateway" 2>/dev/null)" || fail ROUTE_INSPECTION_FAILED "无法检查入口路由；未启动隧道。"
+        destination="$(printf '%s\n' "$route_info" | awk '$1=="destination:" {print $2}')"
+        [[ "$destination" == default ]] || fail ROUTE_CONFLICT "入口已有特定路由；如为旧 WireGuard App 隧道，请本人先停用，再重跑。"
+        # Reject an already assigned device address, even if its route disappeared.
+        conflicting="$(ifconfig -a | awk -v target="${address%/32}" '$1=="inet" && $2==target {found=1} END {print found+0}')"
+    else
+        conflicting="$(ip -4 route show match "$gateway" | awk '$1!="default" {bad=1} END {print bad+0}')"
+    fi
+    [[ "$conflicting" == 0 ]] || fail ROUTE_CONFLICT "设备地址或入口路由已被使用；未停止任何现有 VPN。"
 }
 case "$action" in
     check)
@@ -263,32 +337,27 @@ case "$action" in
             done
         fi
         if $no_activate; then report CONFIGURED; exit 0; fi
-        if [[ "$platform" == macos ]]; then
-            printf 'Import %s in WireGuard, allow VPN permission, then activate it.\n' "$state/$tunnel.conf" >&2
-            if ! $client_ready && $install_clients; then open 'macappstore://apps.apple.com/app/wireguard/id1451685025'; fi
-            report NEEDS_VPN_PERMISSION; exit 3
-        fi
-        $client_ready || fail DEPENDENCY_MISSING "Run setup --install-clients after authorizing software installation."
-        if sudo wg show interfaces 2>/dev/null | tr ' ' '\n' | awk -v tunnel="$tunnel" '$0==tunnel {found=1} END {exit !found}'; then
+        $client_ready || fail DEPENDENCY_MISSING "请运行 setup --install-clients 安装 WireGuard CLI。"
+        require_tunnel_admin
+        if resolve_tunnel_interface; then
             owned_tunnel || fail TUNNEL_CONFLICT "Existing tunnel does not belong to this device."
         else
-            conflicting="$(ip -4 route show match "$gateway" | awk -v tunnel="$tunnel" '$1!="default" {for(i=1;i<=NF;i++) if($i=="dev" && $(i+1)!=tunnel) bad=1} END {print bad+0}')"
-            [[ "$conflicting" == 0 ]] || fail ROUTE_CONFLICT "An existing network route covers the workspace gateway."
-            sudo wg-quick up "$state/$tunnel.conf" >/dev/null 2>&1 ||
+            check_new_tunnel_route
+            sudo "$wg_quick_bin" up "$state/$tunnel.conf" >/dev/null 2>&1 ||
                 fail TUNNEL_START_FAILED "Tunnel startup failed; check system permission and networking."
             owned_tunnel || fail TUNNEL_CONFLICT "Started tunnel does not match the assigned identity."
         fi
         report CONFIGURED ;;
     disconnect)
         require_installed
-        if [[ "$platform" == macos ]]; then
-            printf 'Deactivate only %s in WireGuard.\n' "$tunnel" >&2
-            report NEEDS_VPN_PERMISSION; exit 3
-        fi
-        if sudo wg show interfaces 2>/dev/null | tr ' ' '\n' | awk -v tunnel="$tunnel" '$0==tunnel {found=1} END {exit !found}'; then
+        $client_ready || fail DEPENDENCY_MISSING "缺少 WireGuard CLI。"
+        require_tunnel_admin
+        if resolve_tunnel_interface; then
             owned_tunnel || fail TUNNEL_CONFLICT "Tunnel ownership mismatch; nothing stopped."
-            sudo wg-quick down "$state/$tunnel.conf" >/dev/null 2>&1 ||
+            sudo "$wg_quick_bin" down "$state/$tunnel.conf" >/dev/null 2>&1 ||
                 fail TUNNEL_STOP_FAILED "Tunnel did not stop."
+        elif [[ "$platform" == macos ]]; then
+            check_new_tunnel_route
         fi
         report DISCONNECTED ;;
     connect|sftp)
@@ -296,41 +365,48 @@ case "$action" in
         cleanup
         stage=""
         if [[ "$action" == connect ]]; then exec ssh -F "$state/ssh_config" -tt workspace
-        else exec sftp -F "$state/ssh_config" -s employee-sftp workspace; fi ;;
+        else exec sftp -F "$state/ssh_config" workspace; fi ;;
     verify)
         require_installed
+        $client_ready || fail DEPENDENCY_MISSING "缺少 WireGuard CLI。"
+        require_tunnel_admin
+        owned_tunnel || fail TUNNEL_CONFLICT "Live tunnel identity or routing mismatch."
         nonce="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
         prefix="WS_${nonce}"
-        # Force a PTY; do not append a remote command to SSH.
-        cat > "$stage/verify-input" <<EOF
-stty -echo
-printf '\n${prefix}_BEGIN\n'
-if [ "\$(id -un)" = employee ]; then printf '${prefix}_USER=passed\n'; else printf '${prefix}_USER=failed\n'; fi
-if [ "\$(hostname)" = "$vm_hostname" ]; then printf '${prefix}_VM=passed\n'; else printf '${prefix}_VM=failed\n'; fi
-if sudo -n true; then printf '${prefix}_SUDO=passed\n'; else printf '${prefix}_SUDO=failed\n'; fi
-if command -v claude >/dev/null && workspace-login --check >/dev/null && command -v workspace-browser >/dev/null; then printf '${prefix}_CLI=passed\n'; else printf '${prefix}_CLI=failed\n'; fi
-python3 -c 'import json,subprocess; r=subprocess.run(["claude","auth","status"],capture_output=True,text=True,timeout=20); d=json.loads(r.stdout); print("${prefix}_AUTH="+("passed" if d.get("loggedIn") is True and d.get("authMethod")=="claude.ai" else "user_action_required"))' 2>/dev/null
-printf '${prefix}_END\n'
-exit
-EOF
-        if ! ssh -F "$state/ssh_config" -tt workspace < "$stage/verify-input" > "$stage/ssh-output" 2> "$stage/ssh-error"; then
+        # One complete command fits the PTY line discipline. No queued commands
+        # remain for a CLI or shell hook to consume. No gateway command is appended.
+        payload="$(sed -e "s/__PREFIX__/$prefix/g" -e "s/__VM__/$vm_hostname/g" "$repo_dir/scripts/verify-session.py" | base64 | tr -d '\r\n')"
+        [[ ${#payload} -lt 3500 ]] || fail SSH_PROTOCOL_FAILED "Verification payload exceeds the PTY line limit."
+        printf "stty -echo; exec python3 -c 'import base64;exec(base64.b64decode(\"%s\"))' </dev/null\n" "$payload" > "$stage/verify-input"
+        if run_bounded 60 ssh -F "$state/ssh_config" -tt workspace < "$stage/verify-input" > "$stage/ssh-output" 2> "$stage/ssh-error"; then
+            connection_status=0
+        else connection_status=$?; fi
+        [[ "$connection_status" != 124 ]] || fail VERIFY_TIMEOUT "SSH verification exceeded 60 seconds; stop and report this code."
+        if [[ "$connection_status" != 0 ]]; then
             if grep -Eq 'REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed' "$stage/ssh-error"; then
                 fail SSH_HOST_KEY_MISMATCH "Host identity changed; do not disable host verification."
             fi
             fail SSH_CONNECTION_FAILED "Check WireGuard, device permission and networking."
         fi
-        tr -d '\r' < "$stage/ssh-output" > "$stage/lines"
-        grep -qx "${prefix}_END" "$stage/lines" || fail SSH_PROTOCOL_FAILED "Interactive verification did not finish."
+        normalize_terminal < "$stage/ssh-output" > "$stage/lines"
+        for marker in BEGIN END; do
+            [[ "$(grep -cx "${prefix}_$marker" "$stage/lines" || true)" == 1 ]] || fail SSH_PROTOCOL_FAILED "Verification frame is missing or duplicated."
+        done
+        for field in USER VM SUDO CLI; do
+            [[ "$(grep -Ec "^${prefix}_${field}=(passed|failed)$" "$stage/lines" || true)" == 1 ]] || fail SSH_PROTOCOL_FAILED "Verification field is missing or duplicated."
+        done
+        [[ "$(grep -Ec "^${prefix}_AUTH=(passed|user_action_required|unavailable)$" "$stage/lines" || true)" == 1 ]] || fail SSH_PROTOCOL_FAILED "Authentication field is missing or duplicated."
         grep -qx "${prefix}_USER=passed" "$stage/lines" && ssh_identity=passed
         grep -qx "${prefix}_VM=passed" "$stage/lines" && assigned_vm=passed
         grep -qx "${prefix}_SUDO=passed" "$stage/lines" && sudo_check=passed
         grep -qx "${prefix}_CLI=passed" "$stage/lines" && cli_check=passed
-        grep -qx "${prefix}_AUTH=passed" "$stage/lines" && claude_auth=passed
+        claude_auth=unavailable
+        if grep -qx "${prefix}_AUTH=passed" "$stage/lines"; then claude_auth=passed
+        elif grep -qx "${prefix}_AUTH=user_action_required" "$stage/lines"; then claude_auth=user_action_required; fi
         [[ "$ssh_identity" == passed && "$assigned_vm" == passed ]] ||
             fail WORKSPACE_ID_MISMATCH "Wrong user or VM; file verification was not attempted."
-        if [[ "$platform" == linux ]]; then
-            owned_tunnel || fail TUNNEL_CONFLICT "Live tunnel identity or routing mismatch."
-            timestamp="$(sudo wg show "$tunnel" latest-handshakes 2>/dev/null | awk -v peer="$peer" '$1==peer {print $2}')"
+        if [[ "$platform" == macos || "$platform" == linux ]]; then
+            timestamp="$(sudo "$wg_bin" show "$wg_interface" latest-handshakes 2>/dev/null | awk -v peer="$peer" '$1==peer {print $2}')"
             now="$(date +%s)"
             if [[ "$timestamp" =~ ^[0-9]+$ && "$timestamp" -gt 0 && $((now-timestamp)) -ge 0 && $((now-timestamp)) -le 180 ]]; then handshake=passed
             else handshake=failed; fail NO_RECENT_HANDSHAKE "No recent WireGuard handshake."; fi
@@ -342,14 +418,19 @@ mkdir $remote_dir
 put "$stage/probe.txt" $remote_dir/probe.txt
 get $remote_dir/probe.txt "$stage/returned.txt"
 EOF
-        sftp -F "$state/ssh_config" -s employee-sftp -b "$stage/sftp-batch" workspace > "$stage/sftp-output" 2>&1 ||
-            fail SFTP_ROUNDTRIP_FAILED "SFTP roundtrip failed; unverified remote content left untouched."
+        if run_bounded 30 sftp -F "$state/ssh_config" -b "$stage/sftp-batch" workspace > "$stage/sftp-output" 2>&1; then transfer_status=0
+        else transfer_status=$?; fi
+        [[ "$transfer_status" != 124 ]] || fail VERIFY_TIMEOUT "SFTP verification exceeded 30 seconds; stop and report this code."
+        [[ "$transfer_status" == 0 ]] || fail SFTP_ROUNDTRIP_FAILED "SFTP roundtrip failed; unverified remote content left untouched."
         cmp -s "$stage/probe.txt" "$stage/returned.txt" || fail SFTP_CONTENT_MISMATCH "SFTP content differs; test directory preserved."
         printf 'rm %s/probe.txt\nrmdir %s\n' "$remote_dir" "$remote_dir" > "$stage/sftp-cleanup"
-        sftp -F "$state/ssh_config" -s employee-sftp -b "$stage/sftp-cleanup" workspace >/dev/null 2>&1 ||
-            fail SFTP_CLEANUP_FAILED "Could not clean this test directory; project files untouched."
+        if run_bounded 30 sftp -F "$state/ssh_config" -b "$stage/sftp-cleanup" workspace >/dev/null 2>&1; then cleanup_status=0
+        else cleanup_status=$?; fi
+        [[ "$cleanup_status" != 124 ]] || fail VERIFY_TIMEOUT "SFTP cleanup exceeded 30 seconds; stop and report this code."
+        [[ "$cleanup_status" == 0 ]] || fail SFTP_CLEANUP_FAILED "Could not clean this test directory; project files untouched."
         sftp_check=passed
         [[ "$sudo_check" == passed && "$cli_check" == passed ]] || fail VM_BASELINE_FAILED "VM sudo or CLI checks failed."
+        [[ "$claude_auth" != unavailable ]] || fail CLAUDE_AUTH_CHECK_FAILED "Claude status could not be checked; do not treat this as logged out."
         if [[ "$claude_auth" != passed ]]; then report CLAUDE_AUTH_USER_PENDING
         elif [[ "$handshake" == unavailable ]]; then report HANDSHAKE_INSPECTION_UNAVAILABLE
         else report CONNECTION_VERIFIED; fi ;;

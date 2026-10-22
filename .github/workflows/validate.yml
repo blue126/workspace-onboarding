@@ -37,7 +37,9 @@ jobs:
           }
           if ($failed) { exit 1 }
       - name: Native entry point contracts
-        run: python tests/test_bootstrap.py -v
+        run: |
+          python tests/test_bootstrap.py -v
+          python tests/test_verify_session.py -v
       - name: Windows PowerShell 5.1 compatibility
         if: runner.os == 'Windows'
         env:

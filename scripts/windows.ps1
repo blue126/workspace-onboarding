@@ -51,7 +51,7 @@ function Admin() {
     $principal=New-Object Security.Principal.WindowsPrincipal($identity)
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
-function Native([string]$Exe,[string[]]$Arguments,[string]$InputText='') {
+function Native([string]$Exe,[string[]]$Arguments,[string]$InputText='',[int]$TimeoutMilliseconds=90000) {
     # All caller-controlled paths reject quotes/newlines; forward slashes avoid
     # Windows trailing-backslash quoting ambiguity. No secret values in arguments.
     $quoted=@()
@@ -74,8 +74,11 @@ function Native([string]$Exe,[string[]]$Arguments,[string]$InputText='') {
     $errTask=$proc.StandardError.ReadToEndAsync()
     if($InputText) { $proc.StandardInput.Write($InputText.Replace("`r`n","`n")) }
     $proc.StandardInput.Close()
-    if(!$proc.WaitForExit(90000)) { $proc.Kill(); $proc.WaitForExit(); throw 'Native command timed out.' }
-    $nativeResult=@{ExitCode=$proc.ExitCode;Out=$outTask.Result;Err=$errTask.Result}
+    if(!$proc.WaitForExit($TimeoutMilliseconds)) {
+        & (Join-Path $env:WINDIR 'System32/taskkill.exe') /PID $proc.Id /T /F 2>$null | Out-Null
+        if(!$proc.WaitForExit(1000)) { $proc.Kill(); $proc.WaitForExit() }
+        $nativeResult=@{ExitCode=124;Out='';Err='';TimedOut=$true}
+    } else { $nativeResult=@{ExitCode=$proc.ExitCode;Out=$outTask.Result;Err=$errTask.Result;TimedOut=$false} }
     $proc.Dispose()
     return $nativeResult
 }
@@ -116,14 +119,17 @@ try {
             Add-WindowsCapability -Online -Name 'OpenSSH.Client~~~~0.0.1.0' | Out-Null
         }
         if(!(Test-Path -LiteralPath $wireguard)) {
-            $installer=Join-Path ([IO.Path]::GetTempPath()) ('wireguard-'+[Guid]::NewGuid().ToString('N')+'.exe')
-            Invoke-WebRequest 'https://download.wireguard.com/windows-client/wireguard-installer.exe' -OutFile $installer -UseBasicParsing
+            $architecture=[Environment]::GetEnvironmentVariable('PROCESSOR_ARCHITEW6432')
+            if(!$architecture) { $architecture=$env:PROCESSOR_ARCHITECTURE }
+            $architecture=switch($architecture) { 'AMD64' { 'amd64' } 'ARM64' { 'arm64' } 'x86' { 'x86' } default { Stop-Setup 'UNSUPPORTED_PLATFORM' 'Unsupported Windows processor architecture.' } }
+            $installer=Join-Path ([IO.Path]::GetTempPath()) ('wireguard-'+[Guid]::NewGuid().ToString('N')+'.msi')
+            Invoke-WebRequest ('https://download.wireguard.com/windows-client/wireguard-'+$architecture+'-1.1.1.msi') -OutFile $installer -UseBasicParsing
             $signature=Get-AuthenticodeSignature -FilePath $installer
             if($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'CN=WireGuard LLC(?:,|$)') {
                 Stop-Setup 'INSTALLER_SIGNATURE_INVALID' 'WireGuard installer signature validation failed.'
             }
-            $install=Start-Process -FilePath $installer -Wait -PassThru
-            if($install.ExitCode -ne 0) { Stop-Setup 'INSTALL_FAILED' 'WireGuard installation did not complete.' }
+            $install=Start-Process -FilePath (Join-Path $env:WINDIR 'System32/msiexec.exe') -ArgumentList @('/i',('"'+$installer+'"'),'/qn','/norestart','DO_NOT_LAUNCH=1') -Wait -PassThru
+            if($install.ExitCode -notin @(0,3010)) { Stop-Setup 'INSTALL_FAILED' 'WireGuard installation did not complete.' }
         }
     }
     $sshCommand=Get-Command ssh.exe -ErrorAction SilentlyContinue
@@ -214,7 +220,7 @@ try {
     $pinCheck=Native $keygenCommand.Source @('-lf',(Join-Path $stage 'known_hosts'))
     if($keyCheck.ExitCode -ne 0 -or $pinCheck.ExitCode -ne 0) { Stop-Setup 'KEY_INVALID' 'OpenSSH could not parse credentials.' }
     $result.package_verified=$true
-    if(!$StateRoot) { $StateRoot=Join-Path $env:LOCALAPPDATA 'WorkspaceOnboarding' }
+    if(!$StateRoot) { $StateRoot=Join-Path $env:USERPROFILE 'EmployeeWorkspace\devices' }
     $StateRoot=[IO.Path]::GetFullPath($StateRoot)
     if($StateRoot -match '["%\r\n]' -or ($StateRoot+'\').StartsWith($repoDir+'\',[StringComparison]::OrdinalIgnoreCase)) {
         Stop-Setup 'STATE_PATH_UNSAFE' 'Private client state must be outside the repository.'
@@ -298,33 +304,39 @@ Host workspace
             Report 'DISCONNECTED'
         }
         'connect' { Require-Installed; & $sshCommand.Source -F $config -tt workspace; exit $LASTEXITCODE }
-        'sftp' { Require-Installed; & $sftpCommand.Source -F $config -s employee-sftp workspace; exit $LASTEXITCODE }
+        'sftp' { Require-Installed; & $sftpCommand.Source -F $config workspace; exit $LASTEXITCODE }
         'verify' {
             Require-Installed
+            if(!(Admin)) { Stop-Setup 'NEEDS_ADMIN' 'Run the same verify command in an employee-approved elevated PowerShell.' }
+            if(!(Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'WireGuard/wg.exe'))) { Stop-Setup 'DEPENDENCY_MISSING' 'WireGuard CLI is missing.' }
             $nonce=[Guid]::NewGuid().ToString('N')
             $prefix='WS_'+$nonce
-            $remote=@'
-stty -echo
-printf '\nPREFIX_BEGIN\n'
-if [ "$(id -un)" = employee ]; then printf 'PREFIX_USER=passed\n'; else printf 'PREFIX_USER=failed\n'; fi
-if [ "$(hostname)" = "VMNAME" ]; then printf 'PREFIX_VM=passed\n'; else printf 'PREFIX_VM=failed\n'; fi
-if sudo -n true; then printf 'PREFIX_SUDO=passed\n'; else printf 'PREFIX_SUDO=failed\n'; fi
-if command -v claude >/dev/null && workspace-login --check >/dev/null && command -v workspace-browser >/dev/null; then printf 'PREFIX_CLI=passed\n'; else printf 'PREFIX_CLI=failed\n'; fi
-python3 -c 'import json,subprocess; r=subprocess.run(["claude","auth","status"],capture_output=True,text=True,timeout=20); d=json.loads(r.stdout); print("PREFIX_AUTH="+("passed" if d.get("loggedIn") is True and d.get("authMethod")=="claude.ai" else "user_action_required"))' 2>/dev/null
-printf 'PREFIX_END\n'
-exit
-'@
-            $remote=$remote.Replace('PREFIX',$prefix).Replace('VMNAME',$manifest.vm_hostname)+"`n"
-            $connection=Native $sshCommand.Source @('-F',$config,'-tt','workspace') $remote
+            $source=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'verify-session.py')).Replace('__PREFIX__',$prefix).Replace('__VM__',$manifest.vm_hostname)
+            $payload=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($source))
+            if($payload.Length -ge 3500) { Stop-Setup 'SSH_PROTOCOL_FAILED' 'Verification payload exceeds the PTY line limit.' }
+            $remote="stty -echo; exec python3 -c 'import base64;exec(base64.b64decode(`"$payload`"))' </dev/null`n"
+            $connection=Native $sshCommand.Source @('-F',$config,'-tt','workspace') $remote 60000
+            if($connection.TimedOut) { Stop-Setup 'VERIFY_TIMEOUT' 'SSH verification exceeded 60 seconds; stop and report this code.' }
             if($connection.ExitCode -ne 0) {
                 if($connection.Err -match 'Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED') { Stop-Setup 'SSH_HOST_KEY_MISMATCH' 'Host pin verification failed.' }
                 Stop-Setup 'SSH_CONNECTION_FAILED' 'Check WireGuard, network and device permission.'
             }
-            $lines=$connection.Out.Replace("`r",'').Split("`n")
-            if($lines -cnotcontains ($prefix+'_END')) { Stop-Setup 'SSH_PROTOCOL_FAILED' 'Interactive verification did not finish.' }
-            foreach($pair in @(@('USER','ssh_identity'),@('VM','assigned_vm'),@('SUDO','sudo'),@('CLI','cli'),@('AUTH','claude_auth'))) {
+            $clean=[regex]::Replace($connection.Out,'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)','')
+            $clean=[regex]::Replace($clean,'\x1b\[[0-?]*[ -/]*[@-~]','')
+            $lines=$clean.Replace("`r",'').Split("`n")
+            foreach($marker in @('BEGIN','END')) {
+                if(@($lines | Where-Object { $_ -ceq ($prefix+'_'+$marker) }).Count -ne 1) { Stop-Setup 'SSH_PROTOCOL_FAILED' 'Verification frame is missing or duplicated.' }
+            }
+            foreach($field in @('USER','VM','SUDO','CLI')) {
+                if(@($lines | Where-Object { $_ -cmatch ('^'+$prefix+'_'+$field+'=(passed|failed)$') }).Count -ne 1) { Stop-Setup 'SSH_PROTOCOL_FAILED' 'Verification field is missing or duplicated.' }
+            }
+            if(@($lines | Where-Object { $_ -cmatch ('^'+$prefix+'_AUTH=(passed|user_action_required|unavailable)$') }).Count -ne 1) { Stop-Setup 'SSH_PROTOCOL_FAILED' 'Authentication field is missing or duplicated.' }
+            foreach($pair in @(@('USER','ssh_identity'),@('VM','assigned_vm'),@('SUDO','sudo'),@('CLI','cli'))) {
                 if($lines -ccontains ($prefix+'_'+$pair[0]+'=passed')) { $result[$pair[1]]='passed' }
             }
+            $result.claude_auth='unavailable'
+            if($lines -ccontains ($prefix+'_AUTH=passed')) { $result.claude_auth='passed' }
+            elseif($lines -ccontains ($prefix+'_AUTH=user_action_required')) { $result.claude_auth='user_action_required' }
             if($result.ssh_identity -ne 'passed' -or $result.assigned_vm -ne 'passed') { Stop-Setup 'WORKSPACE_ID_MISMATCH' 'Unexpected user or workspace VM.' }
             $wgTool=Join-Path $env:ProgramFiles 'WireGuard/wg.exe'
             if((Test-Path $wgTool) -and (Admin)) {
@@ -347,14 +359,17 @@ exit
             $remoteDir='/tmp/ws-onboarding-'+$nonce
             $batch=Join-Path $stage 'batch.txt'
             Write-Utf8 $batch ("mkdir $remoteDir`nput `"$($probe.Replace('\','/'))`" $remoteDir/probe.txt`nget $remoteDir/probe.txt `"$($returned.Replace('\','/'))`"`n")
-            $transfer=Native $sftpCommand.Source @('-F',$config,'-s','employee-sftp','-b',$batch,'workspace')
+            $transfer=Native $sftpCommand.Source @('-F',$config,'-b',$batch,'workspace') '' 30000
+            if($transfer.TimedOut) { Stop-Setup 'VERIFY_TIMEOUT' 'SFTP verification exceeded 30 seconds; stop and report this code.' }
             if($transfer.ExitCode -ne 0) { Stop-Setup 'SFTP_ROUNDTRIP_FAILED' 'SFTP roundtrip failed; unverified files left untouched.' }
             if((Hash-File $probe) -cne (Hash-File $returned)) { Stop-Setup 'SFTP_CONTENT_MISMATCH' 'SFTP content mismatch; test directory preserved.' }
             Write-Utf8 $batch ("rm $remoteDir/probe.txt`nrmdir $remoteDir`n")
-            $cleanup=Native $sftpCommand.Source @('-F',$config,'-s','employee-sftp','-b',$batch,'workspace')
+            $cleanup=Native $sftpCommand.Source @('-F',$config,'-b',$batch,'workspace') '' 30000
+            if($cleanup.TimedOut) { Stop-Setup 'VERIFY_TIMEOUT' 'SFTP cleanup exceeded 30 seconds; stop and report this code.' }
             if($cleanup.ExitCode -ne 0) { Stop-Setup 'SFTP_CLEANUP_FAILED' 'This test directory could not be cleaned.' }
             $result.sftp_roundtrip='passed'
             if($result.sudo -ne 'passed' -or $result.cli -ne 'passed') { Stop-Setup 'VM_BASELINE_FAILED' 'VM sudo or base CLI check failed.' }
+            if($result.claude_auth -eq 'unavailable') { Stop-Setup 'CLAUDE_AUTH_CHECK_FAILED' 'Claude status could not be checked; do not treat this as logged out.' }
             if($result.claude_auth -ne 'passed') { Report 'CLAUDE_AUTH_USER_PENDING' }
             elseif($result.tunnel_handshake -eq 'unavailable') { Report 'HANDSHAKE_INSPECTION_UNAVAILABLE' }
             else { Report 'CONNECTION_VERIFIED' }
