@@ -34,6 +34,8 @@ class Bootstrap(unittest.TestCase):
         self.path = Path(self.temp.name)
         self.bin = self.path / "bin"
         self.bin.mkdir()
+        self.source_root = ROOT
+        self.default_bundle = False
         self.state = self.path / "private state"
         self.package = self.path / "fixture.zip"
         self.manifest = {
@@ -68,11 +70,68 @@ class Bootstrap(unittest.TestCase):
     def command(self, action, *extra):
         if WINDOWS:
             shell = os.environ.get("TEST_POWERSHELL", "pwsh")
-            return [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT/"bootstrap.ps1"),
-                    action, "-Bundle", str(self.package), "-Sha256", self.digest,
-                    "-StateRoot", str(self.state), *extra]
-        return ["/bin/bash", str(ROOT/"bootstrap.sh"), action, "--bundle", str(self.package),
-                "--sha256", self.digest, "--state-root", str(self.state), *extra]
+            bundle_args=[] if self.default_bundle else ["-Bundle", str(self.package), "-Sha256", self.digest]
+            return [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(self.source_root/"bootstrap.ps1"),
+                    action, *bundle_args, "-StateRoot", str(self.state), *extra]
+        bundle_args=[] if self.default_bundle else ["--bundle", str(self.package), "--sha256", self.digest]
+        return ["/bin/bash", str(self.source_root/"bootstrap.sh"), action, *bundle_args,
+                "--state-root", str(self.state), *extra]
+
+    def default_locations(self):
+        self.default_bundle=True
+        self.source_root=self.path/"public-source"
+        self.source_root.mkdir()
+        for name in ("bootstrap.sh","bootstrap.ps1"):
+            shutil.copyfile(ROOT/name,self.source_root/name)
+        shutil.copytree(ROOT/"scripts",self.source_root/"scripts",ignore=shutil.ignore_patterns("__pycache__"))
+        profile=self.path/"user-profile"
+        profile.mkdir()
+        self.env["HOME"]=str(profile)
+        self.env["USERPROFILE"]=str(profile)
+        primary=profile/"Downloads"/"employee-workspace"
+        fallback=self.source_root/"deployment"
+        return primary,fallback
+
+    def place_default_bundle(self, directory):
+        directory.mkdir(parents=True,exist_ok=True)
+        shutil.copyfile(self.package,directory/"device-bundle.zip")
+        (directory/"device-bundle.sha256").write_text(self.digest+"\n")
+        (directory/"README.md").write_text("Synthetic device connection sheet\n")
+
+    def test_default_download_directory_has_priority(self):
+        primary,fallback=self.default_locations()
+        self.place_default_bundle(primary)
+        self.place_default_bundle(fallback)
+        (fallback/"device-bundle.zip").write_bytes(b"wrong-other-device")
+        _,report=self.call("check")
+        self.assertIn(report["code"],("CHECKED","DEPENDENCY_MISSING"))
+        self.assertTrue(report["package_verified"])
+
+    def test_project_fallback_when_download_directory_has_no_device_files(self):
+        primary,fallback=self.default_locations()
+        primary.mkdir(parents=True)
+        self.place_default_bundle(fallback)
+        _,report=self.call("check")
+        self.assertIn(report["code"],("CHECKED","DEPENDENCY_MISSING"))
+        self.assertTrue(report["package_verified"])
+
+    def test_partial_primary_does_not_select_other_fallback_identity(self):
+        primary,fallback=self.default_locations()
+        primary.mkdir(parents=True)
+        (primary/"device-bundle.sha256").write_text(self.digest+"\n")
+        self.place_default_bundle(fallback)
+        self.call("check",code="PACKAGE_MISSING")
+
+    def test_invalid_primary_digest_does_not_select_fallback(self):
+        primary,fallback=self.default_locations()
+        self.place_default_bundle(primary)
+        self.place_default_bundle(fallback)
+        (primary/"device-bundle.sha256").write_text("0"*64+"\n")
+        self.call("check",code="PACKAGE_HASH_MISMATCH")
+
+    def test_missing_default_bundle_is_reported(self):
+        self.default_locations()
+        self.call("check",code="PACKAGE_MISSING")
 
     def call(self, action, *extra, code=None):
         run = subprocess.run(self.command(action, *extra), env=self.env, capture_output=True, text=True, timeout=100)

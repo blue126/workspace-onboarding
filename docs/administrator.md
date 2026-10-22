@@ -1,36 +1,9 @@
-# Administrator: fixed per-device file location
+# 设备文件交付约定
 
-Employees use the public [workspace-onboarding GitHub project](https://github.com/blue126/workspace-onboarding) directly; no GitHub account is required. Do not build an all-in-one employee project ZIP.
+管理员通过 OneDrive 为指定员工私人共享本设备的 `device-bundle.zip`、`device-bundle.sha256`、`README.md`（实际连接单），并在通知邮件中提供公开 GitHub 项目地址和本人共享链接。
 
-For each device, privately supply these files:
+员工把链接交给本机 Agent；Agent 获取公共代码、从该共享下载三个文件，保存到项目外的 `Downloads/employee-workspace/`。只有找不到首选目录设备文件时，项目内 deployment/ 才作为后备。
 
-- `device-bundle.zip`: that device's four-file SSH/WireGuard identity bundle.
-- `device-bundle.sha256`: the independently recorded lowercase SHA256 of that exact bundle.
-- `README.md`: that device's actual VM, gateway, and browser connection sheet.
+包内格式固定为四个顶层普通文件：manifest.json、client-key、wg.key、known_hosts。SHA256 文件描述整个 bundle ZIP。每台设备独立签发，不能共享身份。管理员生成、上传和通知工具保留在管理员私有环境。
 
-The employee places them in the checkout's pre-created `deployment/` folder with exactly these names:
-
-```text
-deployment/
-  .gitkeep
-  device-bundle.zip
-  device-bundle.sha256
-  README.md
-```
-
-`.gitignore` ignores all files in this directory except the empty tracked `.gitkeep`. The bootstrap scripts default to `deployment/device-bundle.zip` and `deployment/device-bundle.sha256`; the local Agent reads `deployment/README.md` for the browser address. Missing or mismatched files must stop setup and be reissued by the administrator. Never commit or upload this directory.
-
-Each computer receives its own SSH/WireGuard credentials and tunnel address, even if multiple computers belong to one employee. The bundle must contain exactly these four ordinary files at its top level:
-
-- `manifest.json`
-- `client-key`
-- `wg.key`
-- `known_hosts`
-
-The SHA256 file covers the full ZIP. Never copy a bundle between devices. Deliver its files through the administrator's private channel, not a GitHub issue, public release, CI artifact, or public object URL.
-
-## Validation and revocation
-
-GitHub CI uses synthetic credentials; it does not inspect actual device bundles or connect to the company environment. The administrator should verify the recipient and device assignment before delivery. Employees complete OS authorization, WireGuard connectivity, personal Claude sign-in, and a small real project task themselves.
-
-Deleting local files does not revoke an issued identity. Revoke the device and disable the VM through the infrastructure process.
+公开代码不包含私人链接、真实设备数据或管理员工具。

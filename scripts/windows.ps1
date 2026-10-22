@@ -131,16 +131,32 @@ try {
     $keygenCommand=Get-Command ssh-keygen.exe -ErrorAction SilentlyContinue
     if(!$sshCommand -or !$sftpCommand -or !$keygenCommand) { Stop-Setup 'DEPENDENCY_MISSING' 'OpenSSH client is missing; authorize setup -InstallClients.' }
     $result.client_ready=Test-Path -LiteralPath $wireguard
-    $embeddedBundle=Join-Path $repoDir 'deployment/device-bundle.zip'
-    if(!$Bundle) { $Bundle=$embeddedBundle }
+    $bundleDir=$null
+    if(!$Bundle) {
+        $profileDir=$env:USERPROFILE
+        if(!$profileDir) { $profileDir=[Environment]::GetFolderPath('UserProfile') }
+        $primaryDir=Join-Path $profileDir 'Downloads/employee-workspace'
+        $fallbackDir=Join-Path $repoDir 'deployment'
+        $bundleDir=$primaryDir
+        $primarySeen=$false
+        foreach($name in @('device-bundle.zip','device-bundle.sha256','README.md')) {
+            if(Test-Path -LiteralPath (Join-Path $primaryDir $name)) { $primarySeen=$true }
+        }
+        if(!$primarySeen) {
+            foreach($name in @('device-bundle.zip','device-bundle.sha256','README.md')) {
+                if(Test-Path -LiteralPath (Join-Path $fallbackDir $name)) { $bundleDir=$fallbackDir; break }
+            }
+        }
+        $Bundle=Join-Path $bundleDir 'device-bundle.zip'
+    }
     if(!$Sha256) {
-        if([IO.Path]::GetFullPath($Bundle) -cne [IO.Path]::GetFullPath($embeddedBundle)) {
-            Stop-Setup 'PACKAGE_HASH_REQUIRED' 'External device bundles require -Sha256.'
+        if(!$bundleDir) { Stop-Setup 'PACKAGE_HASH_REQUIRED' 'External device bundles require -Sha256.' }
+        $digestPath=Join-Path $bundleDir 'device-bundle.sha256'
+        if(!(Test-Path -LiteralPath $Bundle -PathType Leaf) -or !(Test-Path -LiteralPath $digestPath -PathType Leaf)) {
+            Stop-Setup 'PACKAGE_MISSING' 'Download the three device files from OneDrive to %USERPROFILE%/Downloads/employee-workspace; project deployment/ is the fallback.'
         }
-        if(!(Test-Path -LiteralPath $Bundle -PathType Leaf) -or !(Test-Path -LiteralPath (Join-Path $repoDir 'deployment/device-bundle.sha256') -PathType Leaf)) {
-            Stop-Setup 'PACKAGE_MISSING' 'Missing deployment/device-bundle.zip or deployment/device-bundle.sha256; put the private files sent by the administrator in deployment/.'
-        }
-        $Sha256=[IO.File]::ReadAllText((Join-Path $repoDir 'deployment/device-bundle.sha256')).Trim()
+        Assert-Regular $digestPath
+        $Sha256=[IO.File]::ReadAllText($digestPath).Trim()
     }
     if($Sha256 -cnotmatch '^[a-f0-9]{64}$') { Stop-Setup 'PACKAGE_HASH_INVALID' 'Invalid SHA256 format.' }
     Assert-Regular $Bundle

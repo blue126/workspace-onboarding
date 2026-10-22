@@ -8,7 +8,8 @@ platform=unsupported
 case "$(uname -s)" in Darwin) platform=macos ;; Linux) platform=linux ;; esac
 action="${1:-check}"
 [[ $# -eq 0 ]] || shift
-bundle="$repo_dir/deployment/device-bundle.zip"
+bundle=""
+bundle_dir=""
 expected_sha=""
 state_root=""
 install_clients=false
@@ -42,6 +43,25 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 case "$action" in check|setup|verify|connect|sftp|disconnect) ;; *) fail INVALID_ACTION "动作：check/setup/verify/connect/sftp/disconnect。" ;; esac
+if [[ -z "$bundle" ]]; then
+    primary_dir="$HOME/Downloads/employee-workspace"
+    fallback_dir="$repo_dir/deployment"
+    bundle_dir="$primary_dir"
+    # A partial primary delivery must never silently select another device's fallback.
+    primary_seen=false
+    for file in device-bundle.zip device-bundle.sha256 README.md; do
+        if [[ -e "$primary_dir/$file" || -L "$primary_dir/$file" ]]; then primary_seen=true; fi
+    done
+    if ! $primary_seen; then
+        for file in device-bundle.zip device-bundle.sha256 README.md; do
+            if [[ -e "$fallback_dir/$file" || -L "$fallback_dir/$file" ]]; then
+                bundle_dir="$fallback_dir"
+                break
+            fi
+        done
+    fi
+    bundle="$bundle_dir/device-bundle.zip"
+fi
 [[ "$platform" != unsupported ]] || fail UNSUPPORTED_PLATFORM "支持 macOS 和 Ubuntu/Debian。"
 [[ "$(id -u)" != 0 ]] || fail RUN_AS_USER "请以本机普通用户运行；需要时脚本会调用 sudo。"
 if [[ "$platform" == linux ]]; then
@@ -72,9 +92,10 @@ hash_file() {
     else sha256sum "$1" | awk '{print $1}'; fi
 }
 if [[ -z "$expected_sha" ]]; then
-    [[ "$bundle" == "$repo_dir/deployment/device-bundle.zip" ]] || fail PACKAGE_HASH_REQUIRED "external package must provide --sha256."
-    [[ -f "$bundle" && -f "$repo_dir/deployment/device-bundle.sha256" ]] || fail PACKAGE_MISSING "缺少 deployment/device-bundle.zip 或 deployment/device-bundle.sha256；请将管理员私下发来的本设备文件放入 deployment/。"
-    expected_sha="$(tr -d '\r\n' < "$repo_dir/deployment/device-bundle.sha256")"
+    [[ -n "$bundle_dir" ]] || fail PACKAGE_HASH_REQUIRED "外部设备包必须提供 --sha256。"
+    [[ -f "$bundle" && ! -L "$bundle" && -f "$bundle_dir/device-bundle.sha256" && ! -L "$bundle_dir/device-bundle.sha256" ]] ||
+        fail PACKAGE_MISSING "请先把 OneDrive 中本设备的三份文件下载到 ~/Downloads/employee-workspace/；找不到时可使用项目 deployment/。"
+    expected_sha="$(tr -d '\r\n' < "$bundle_dir/device-bundle.sha256")"
 fi
 [[ "$expected_sha" =~ ^[a-f0-9]{64}$ ]] || fail PACKAGE_HASH_INVALID "设备包摘要格式无效。"
 [[ -f "$bundle" && ! -L "$bundle" ]] || fail PACKAGE_MISSING "找不到常规设备包文件。"
