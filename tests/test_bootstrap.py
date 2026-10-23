@@ -177,7 +177,12 @@ if name=="sudo":
  if args[:1]==["cat"] and args[1].startswith("/var/run/wireguard/"):
   if not (p/"tunnel-active").exists():sys.exit(1)
   print("utun9");sys.exit(0)
+ if os.environ.get("RESET_SUDO_PATH"):os.environ["PATH"]="/usr/bin:/bin:/usr/sbin:/sbin"
  os.execvp(args[0],args)
+if name=="bash":
+ if args==["--noprofile","--norc","-c","[[ ${BASH_VERSINFO[0]} -ge 4 ]]"]:sys.exit(0)
+ assert pathlib.Path(args[0]).name=="wg-quick",args
+ os.execv(args[0],args)
 if name=="ssh":
  assert args[-1]=="workspace" and "-tt" in args and len(args)==4,args
  data=sys.stdin.read()
@@ -218,7 +223,8 @@ elif name=="sftp":
   elif a[0]=="rmdir":remote(a[1]).rmdir()
   else:raise AssertionError(a)
 elif name=="wg":
- if args==["show","interfaces"]:
+ if args==["--version"]:print("wireguard-tools fixture")
+ elif args==["show","interfaces"]:
   print(("utun9" if sys.platform=="darwin" else m["tunnel_name"]) if (p/"tunnel-active").exists() else "")
  elif args[-1]=="public-key":print("wrong" if os.environ.get("WRONG_TUNNEL") else m["client_wireguard_public_key"])
  elif args[-1]=="peers":print(m["wireguard_public_key"])
@@ -226,7 +232,10 @@ elif name=="wg":
  elif args[-1]=="latest-handshakes":print(m["wireguard_public_key"]+"\t"+str(0 if os.environ.get("STALE_WG") else int(time.time())))
  else:raise AssertionError(args)
 elif name=="wg-quick":
- if args[0]=="up":(p/"tunnel-active").touch()
+ if args==["--help"]:
+  if os.environ.get("BROKEN_WG_QUICK"):sys.exit(1)
+  print("Usage: wg-quick [ up | down | strip ]")
+ elif args[0]=="up":(p/"tunnel-active").touch()
  elif args[0]=="down":(p/"tunnel-active").unlink()
  else:raise AssertionError(args)
 elif name=="wireguard-go":sys.exit(0)
@@ -247,7 +256,7 @@ elif name=="ip":
  else:raise AssertionError(args)
 '''
         (self.path/"manifest-test.json").write_text(json.dumps(self.manifest))
-        for name in ("ssh", "sftp", "sudo", "wg", "wg-quick", "ip", "wireguard-go", "ifconfig", "route"):
+        for name in ("ssh", "sftp", "sudo", "wg", "wg-quick", "ip", "wireguard-go", "ifconfig", "route", "bash"):
             path = self.bin/name
             path.write_text("#!"+sys.executable+"\n"+dispatch)
             path.chmod(0o755)
@@ -397,6 +406,26 @@ elif name=="ip":
         queries=[args for name,args in calls if name=="wg" and args[-1]=="public-key"]
         self.assertTrue(queries)
         self.assertTrue(all(args[1]=="utun9" for args in queries))
+
+    @unittest.skipUnless(sys.platform=="darwin", "macOS sudo environment regression")
+    def test_macos_explicit_bash_and_userspace_survive_sudo_path_reset(self):
+        self.env["RESET_SUDO_PATH"]="1"
+        self.call("setup",code="CONFIGURED")
+        self.call("disconnect",code="DISCONNECTED")
+        calls=[json.loads(line) for line in (self.path/"commands.jsonl").read_text().splitlines()]
+        elevated=[args for name,args in calls if name=="sudo" and args[0]=="/usr/bin/env"]
+        self.assertEqual(len(elevated),2)
+        for args in elevated:
+            self.assertEqual(args[2],"WG_QUICK_USERSPACE_IMPLEMENTATION="+str(self.bin/"wireguard-go"))
+            self.assertEqual(args[3],str(self.bin/"bash"))
+            self.assertEqual(args[4],str(self.bin/"wg-quick"))
+
+    @unittest.skipUnless(sys.platform=="darwin", "macOS executable readiness regression")
+    def test_macos_present_but_broken_wg_quick_is_not_ready(self):
+        self.env["BROKEN_WG_QUICK"]="1"
+        _,result=self.call("check",code="DEPENDENCY_MISSING")
+        self.assertFalse(result["client_ready"])
+        self.assertFalse((self.path/"tunnel-active").exists())
 
     @unittest.skipUnless(sys.platform=="darwin", "macOS GUI address conflict")
     def test_existing_gui_address_is_not_taken_over(self):

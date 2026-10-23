@@ -194,11 +194,39 @@ if [[ "$platform" == macos ]] && $install_clients; then
 fi
 wg_bin="$(command -v wg || true)"
 wg_quick_bin="$(command -v wg-quick || true)"
+wg_bash_bin=""
+wireguard_go_bin="$(command -v wireguard-go || true)"
+wg_runtime_path=""
 if [[ -n "$wg_bin" && -n "$wg_quick_bin" ]]; then
     if [[ "$platform" == macos ]]; then
-        command -v wireguard-go >/dev/null && client_ready=true
+        # The bootstrap itself supports Bash 3.2; Darwin wg-quick requires Bash 4+.
+        for candidate in "$(command -v bash || true)" /opt/homebrew/bin/bash /usr/local/bin/bash; do
+            [[ -n "$candidate" && -x "$candidate" ]] || continue
+            if "$candidate" --noprofile --norc -c '[[ ${BASH_VERSINFO[0]} -ge 4 ]]' >/dev/null 2>&1; then
+                wg_bash_bin="$candidate"
+                break
+            fi
+        done
+        if [[ -n "$wg_bash_bin" && -n "$wireguard_go_bin" ]]; then
+            wg_runtime_path="${wg_bin%/*}:${wireguard_go_bin%/*}:${wg_bash_bin%/*}:/usr/bin:/bin:/usr/sbin:/sbin"
+            if "$wg_bin" --version >/dev/null 2>&1 &&
+               "$wireguard_go_bin" --version >/dev/null 2>&1 &&
+               /usr/bin/env PATH="$wg_runtime_path" WG_QUICK_USERSPACE_IMPLEMENTATION="$wireguard_go_bin" \
+                   "$wg_bash_bin" "$wg_quick_bin" --help >/dev/null 2>&1; then
+                client_ready=true
+            fi
+        fi
     elif command -v ip >/dev/null; then client_ready=true; fi
 fi
+run_wg_quick() {
+    if [[ "$platform" == macos ]]; then
+        # Set these after sudo resets its environment; never rely on env-bash or sudo -E.
+        sudo /usr/bin/env PATH="$wg_runtime_path" WG_QUICK_USERSPACE_IMPLEMENTATION="$wireguard_go_bin" \
+            "$wg_bash_bin" "$wg_quick_bin" "$@"
+    else
+        sudo "$wg_quick_bin" "$@"
+    fi
+}
 wg_interface=""
 write_configs() {
     cat > "$stage/$tunnel.conf" <<EOF
@@ -343,8 +371,14 @@ case "$action" in
             owned_tunnel || fail TUNNEL_CONFLICT "Existing tunnel does not belong to this device."
         else
             check_new_tunnel_route
-            sudo "$wg_quick_bin" up "$state/$tunnel.conf" >/dev/null 2>&1 ||
-                fail TUNNEL_START_FAILED "Tunnel startup failed; check system permission and networking."
+            if run_wg_quick up "$state/$tunnel.conf" >"$stage/wg-quick.log" 2>&1; then tunnel_status=0
+            else tunnel_status=$?; fi
+            if [[ "$tunnel_status" != 0 ]]; then
+                if grep -q 'Version mismatch: bash' "$stage/wg-quick.log"; then
+                    fail TUNNEL_START_FAILED "wg-quick 的 Bash 版本不兼容；更新项目后重跑，不要重置设备身份。"
+                fi
+                fail TUNNEL_START_FAILED "WireGuard 启动失败（退出码 $tunnel_status）；停止并报告此错误，不要修改其他 VPN。"
+            fi
             owned_tunnel || fail TUNNEL_CONFLICT "Started tunnel does not match the assigned identity."
         fi
         report CONFIGURED ;;
@@ -354,7 +388,7 @@ case "$action" in
         require_tunnel_admin
         if resolve_tunnel_interface; then
             owned_tunnel || fail TUNNEL_CONFLICT "Tunnel ownership mismatch; nothing stopped."
-            sudo "$wg_quick_bin" down "$state/$tunnel.conf" >/dev/null 2>&1 ||
+            run_wg_quick down "$state/$tunnel.conf" >/dev/null 2>&1 ||
                 fail TUNNEL_STOP_FAILED "Tunnel did not stop."
         elif [[ "$platform" == macos ]]; then
             check_new_tunnel_route
