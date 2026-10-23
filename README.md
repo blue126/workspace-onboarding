@@ -8,16 +8,16 @@
 
 > 请按 https://github.com/blue126/workspace-onboarding 的指引，从“网盘链接”下载本设备接入包并完成 bootstrap；需要登录或系统授权时交给我。
 
-注：把“网盘链接”换成你邮件中收到的 OneDrive 私人共享链接即可。请使用具备本机文件、终端及浏览器操作能力的 Agent；个人登录、验证码和系统授权由本人操作。
+注：把“网盘链接”换成你邮件中收到的 Temp.sh 下载链接即可。请使用具备本机文件和终端操作能力的 Agent；个人登录、验证码和系统授权由本人操作。
 
 重跑时获取远端 main 的最新代码；已有干净仓库用 `git pull --ff-only` 更新，保留任何本地修改。同一设备继续使用原接入包，不重新生成身份；设备换机时再申请独立接入包。
 
 ## Agent 执行顺序
 
 1. 阅读本项目 README.md、AGENTS.md，获取公开源码到下表指定的源码目录；已有同名目录时先核对来源，不覆盖本地工作。
-2. 使用员工给出的 OneDrive 链接获取本设备的三份文件。正常无需登录 OneDrive；若要求登录、链接失效或拒绝访问，停止并请管理员重新生成免登录链接，不要求员工注册账号。没有浏览器操作能力时给出准确的人工下载步骤。
-3. 创建并使用下方的默认接收目录，下载 `device-bundle.zip`、`device-bundle.sha256` 和 `README.md`（连接单）。只保存这次共享中的文件，不扫描其他网盘内容或覆盖已有不同身份。
-4. 如果 OneDrive 把整个文件夹下载成外层 ZIP，只解开外层，把这三份文件放入默认目录；保留 `device-bundle.zip` 本身，不展开其中的密钥。
+2. 按 [设备包下载](docs/download.md)，对员工提供的 Temp.sh 链接发送 HTTP POST 下载外层 ZIP；无需网盘账号或浏览器，不能用普通 GET 页面代替下载。失败停止，请管理员核对链接，不反复重试。
+3. 校验管理员通知中的外层 SHA256，确认外层恰好是三个顶层普通文件；创建下方默认接收目录。只保存本次交付，不覆盖已有不同身份。
+4. 仅解开外层 ZIP，把 `device-bundle.zip`、`device-bundle.sha256`、`README.md` 放入默认接收目录；保留内层 `device-bundle.zip`，不要自行展开密钥。
 5. 按 [标准验证](docs/verification.md) 运行 check → setup → verify；连接通过且个人授权待处理时，再 connect 进入 VM，用 workspace-login 交本人完成登录。
 
 ## 默认目录
@@ -78,6 +78,7 @@ VPN 使用 CLI：macOS 为 Homebrew wireguard-tools，Linux 为 wg-quick，Windo
 - [验证后的必含信息](docs/after-verify.md)
 - [系统授权](docs/system-authorization.md)
 - [故障处理](docs/troubleshooting.md)
+- [设备包下载](docs/download.md)
 - [设备文件交付约定](docs/administrator.md)
 
 每台电脑使用独立身份，包括同一员工的多台电脑。私密共享链接、设备包和连接单不得写入公开仓库、Issue 或日志。删除文件不等于撤销服务端设备身份。
