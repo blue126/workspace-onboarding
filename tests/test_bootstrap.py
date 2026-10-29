@@ -174,6 +174,7 @@ m=json.loads((p/"manifest-test.json").read_text())
 with (p/"commands.jsonl").open("a") as f:f.write(json.dumps([name,args])+"\n")
 if name=="sudo":
  if args==["-n","true"]:sys.exit(1 if os.environ.get("NEEDS_SUDO") else 0)
+ if args==["-v"]:sys.exit(1 if os.environ.get("SUDO_DENIED") else 0)
  if args[:1]==["cat"] and args[1].startswith("/var/run/wireguard/"):
   if not (p/"tunnel-active").exists():sys.exit(1)
   print("utun9");sys.exit(0)
@@ -378,6 +379,36 @@ elif name=="ip":
         self.env["SSH_SCENARIO"]="pending"
         _,r=self.call("verify",code="CLAUDE_AUTH_USER_PENDING")
         self.assertEqual(r["real_task"],"pending")
+
+    @unittest.skipIf(WINDOWS, "Unix terminal authorization with captured logs")
+    def test_interactive_sudo_allows_redirected_output(self):
+        import pty
+        self.env["NEEDS_SUDO"]="1"
+        master,slave=pty.openpty()
+        try:
+            run=subprocess.run(self.command("setup"),env=self.env,stdin=slave,
+                               stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=100)
+        finally:
+            os.close(slave);os.close(master)
+        report=json.loads([line for line in run.stdout.splitlines() if line.startswith("{")][-1])
+        self.assertEqual(report["code"],"CONFIGURED",run.stderr[-300:])
+        self.assertTrue((self.path/"tunnel-active").exists())
+        calls=[json.loads(line) for line in (self.path/"commands.jsonl").read_text().splitlines()]
+        self.assertIn(["sudo",["-v"]],calls)
+
+    @unittest.skipIf(WINDOWS, "Unix terminal authorization denial")
+    def test_interactive_sudo_denial_does_not_start_tunnel(self):
+        import pty
+        self.env.update(NEEDS_SUDO="1",SUDO_DENIED="1")
+        master,slave=pty.openpty()
+        try:
+            run=subprocess.run(self.command("setup"),env=self.env,stdin=slave,
+                               stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,timeout=100)
+        finally:
+            os.close(slave);os.close(master)
+        report=json.loads([line for line in run.stdout.splitlines() if line.startswith("{")][-1])
+        self.assertEqual(report["code"],"NEEDS_ADMIN")
+        self.assertFalse((self.path/"tunnel-active").exists())
 
     @unittest.skipIf(WINDOWS, "Unix CLI route/tunnel behavior")
     def test_route_conflict_not_changed(self):

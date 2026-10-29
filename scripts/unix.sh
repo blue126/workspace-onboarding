@@ -47,7 +47,8 @@ case "$action" in check|setup|verify|connect|sftp|disconnect) ;; *) fail INVALID
 if $install_clients; then [[ "$action" == setup ]] || fail INVALID_ARGUMENT "只有 setup 可以安装客户端。"; fi
 require_tunnel_admin() {
     if ! sudo -n true >/dev/null 2>&1; then
-        [[ -t 0 && -t 2 ]] || fail NEEDS_ADMIN "请在本人可输入密码的交互终端运行同一条命令；不要把 sudo 密码发给 Agent，也不要仅在另一终端运行 sudo -v。"
+        # Logging may redirect stderr; user input still comes from the terminal.
+        [[ -t 0 ]] || fail NEEDS_ADMIN "请在本人可输入密码的交互终端运行同一条命令；不要把 sudo 密码发给 Agent，也不要仅在另一终端运行 sudo -v。"
         sudo -v || fail NEEDS_ADMIN "需要本人完成 sudo 授权。"
     fi
 }

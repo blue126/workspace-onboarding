@@ -7,7 +7,7 @@
 | PACKAGE_MISSING / PACKAGE_HASH_MISMATCH | 项目不完整或数据包被改变；从获授权仓库取得同一发布版本，联系管理员；不要自行改 hash |
 | PACKAGE_UNSAFE / MANIFEST_INVALID | 包结构、字段或版本不符合约定；由管理员重新生成，不能运行包内脚本 |
 | DEPENDENCY_MISSING | 缺本机客户端；获准后 setup 加 InstallClients／install-clients |
-| NEEDS_ADMIN | 由 Agent 按[系统授权](system-authorization.md)创建交互终端并运行 setup→verify，本人只输入密码/确认 UAC；不依赖另一终端 sudo -v，不发送密码 |
+| NEEDS_ADMIN | 尚未取得系统授权，可能缺少交互输入、授权取消或 sudo 被拒绝；不是单指密码未输入。按[系统授权](system-authorization.md)处理，工具明确拒绝时由本人运行 Agent 给出的 setup→verify 命令；不依赖另一终端 sudo -v，不发送密码 |
 | HOMEBREW_REQUIRED | Agent 按 macOS 指引安装 Homebrew 后重跑 setup --install-clients，系统授权交还本人 |
 | ROUTE_INSPECTION_FAILED / TUNNEL_INSPECTION_FAILED | 无法检查当前路由或 CLI 接口，未修改网络；报告此代码，不盲目启停 |
 | STATE_ROOT_CONFLICT / CONFIG_CONFLICT | 现有目录／配置归属或内容不匹配；保留原文件，联系管理员，不覆盖 |
