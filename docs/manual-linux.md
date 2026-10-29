@@ -8,3 +8,7 @@
 6. 先通过 SSH 进入 VM，依次运行 workspace-browser start、workspace-login；浏览器就绪后再打开 noVNC，在 VM Firefox 中由本人完成 Claude 授权。日常使用 workspace-browser start/status/stop，文件传输用 sftp。
 
 项目源码：`~/EmployeeWorkspace/onboarding/`。setup 的运行配置默认在 `~/EmployeeWorkspace/devices/<device_id>/`，可以从个人主目录直接找到。已有旧配置保留，参见 README 的旧目录说明。
+
+## Mosh 终端试用
+
+已获管理员开通的设备按 [Mosh 客户端安装、连接与验证](mosh.md) 操作。Agent 负责安装和配置，系统授权由本人确认；端口取自当前设备的管理员通知。终端试用无需登录 Claude。

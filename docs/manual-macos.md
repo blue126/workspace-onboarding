@@ -26,3 +26,7 @@ macOS 系统自带 Bash 3.2，不能用于运行 `wg-quick`。bootstrap 会单�
 系统授权由本人完成；不要收集密码。已有同设备 App 隧道时，先由本人确认停用，再启用 CLI，避免重复地址。不修改其他 VPN。
 
 启用使用 `setup`，断开使用 `disconnect`。实现参考：[WireGuard CLI](https://www.wireguard.com/install/)、[Homebrew 软件包](https://formulae.brew.sh/formula/wireguard-tools)。
+
+## Mosh 终端试用
+
+已获管理员开通的设备按 [Mosh 客户端安装、连接与验证](mosh.md) 操作。Agent 负责安装和配置，系统授权由本人确认；端口取自当前设备的管理员通知。终端试用无需登录 Claude。

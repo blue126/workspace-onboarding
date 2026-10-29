@@ -62,6 +62,10 @@ VPN 使用 CLI：macOS 为 Homebrew wireguard-tools，Linux 为 wg-quick，Windo
 
 本人只处理 sudo/UAC 和个人 Claude 授权。已有旧隧道发生冲突时，先确认再处理，不自动关闭其他 VPN。CONFIGURED 不等于连接验收通过，仍需 verify。
 
+## Mosh 终端试用
+
+收到管理员的 Mosh 试用参数后，让本机 Agent 按 [Mosh 安装、连接与验证](docs/mosh.md) 完成设置。先识别当前设备账号，复用现有接入配置；按实际系统安装客户端，再使用该设备分配的端口连接。终端试用以打字响应和断线恢复为主，Claude 登录可跳过。复制给 Agent 的提示词必须包含实际下载链接（需要补包时）、Mosh 服务端命令和该设备端口，不能只写“参考邮件”。
+
 ## VM 内的 Claude 与浏览器
 
 先通过 SSH 进入 VM，依次运行 `workspace-browser start`、`workspace-login`；浏览器就绪后再打开 noVNC，在 VM 的 Firefox 内完成个人授权。交接时按 [验证后的必含信息](docs/after-verify.md) 提醒员工；日常浏览器使用 `workspace-browser start/status/stop`。
@@ -74,6 +78,7 @@ VPN 使用 CLI：macOS 为 Homebrew wireguard-tools，Linux 为 wg-quick，Windo
 - [Windows](docs/manual-windows.md)
 - [macOS](docs/manual-macos.md)
 - [Ubuntu/Debian](docs/manual-linux.md)
+- [Mosh：客户端安装、连接与终端试用](docs/mosh.md)
 - [标准验证：固定命令与预期结果](docs/verification.md)
 - [验证后的必含信息](docs/after-verify.md)
 - [系统授权](docs/system-authorization.md)
