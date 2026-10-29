@@ -18,3 +18,5 @@ Mosh 试用按 [客户端安装、连接与验证](docs/mosh.md) 执行。先识
 verify 后按 [必含信息](docs/after-verify.md) 交接：先给 SSH connect 命令，再指导 VM 内启动浏览器和 workspace-login；禁止项加粗。保留自主表述，不省略这些信息，不先让员工打开未启动的 noVNC。
 
 同一设备重跑时复用原 device bundle 和设备身份；不要重新生成密钥或申请另一台 VM。先核对旧隧道冲突，再按当前 CLI 指引继续。
+
+OCI Hub v2 设备包显式声明 `profile=oci-hub`，使用独立 `devices/oci-hub/<device_id>` 状态、`wh-` 隧道和 `oci-hub-<device_id>` SSH alias。目标为本人 VM 的 `employee` native SSH；员工 WireGuard 使用 51824/15 秒。严格核对目标 SSH host pin 与 HTTPS 证书 SHA256；v1 原入口继续可用。未知版本、profile 或字段均拒绝。细节见 [OCI Hub 接入](docs/oci-hub.md)。

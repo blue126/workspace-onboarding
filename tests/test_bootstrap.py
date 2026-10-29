@@ -185,7 +185,7 @@ if name=="bash":
  assert pathlib.Path(args[0]).name=="wg-quick",args
  os.execv(args[0],args)
 if name=="ssh":
- assert args[-1]=="workspace" and "-tt" in args and len(args)==4,args
+ assert args[-1]==m.get("ssh_alias","workspace") and "-tt" in args and len(args)==4,args
  data=sys.stdin.read()
  import re
  assert data.count("\n")==1 and "exec python3 -c" in data and "</dev/null" in data,data
@@ -209,7 +209,7 @@ if name=="ssh":
   if key=="USER" and scenario=="duplicate":emit(prefix+"_USER=passed")
  emit(prefix+"_END")
 elif name=="sftp":
- assert args[-1]=="workspace" and "-s" not in args,args
+ assert args[-1]==m.get("ssh_alias","workspace") and "-s" not in args,args
  lines=pathlib.Path(args[args.index("-b")+1]).read_text().splitlines()
  root=p/"remote";root.mkdir(exist_ok=True)
  def remote(value):return root/pathlib.PurePosixPath(value).relative_to("/tmp")
@@ -223,6 +223,10 @@ elif name=="sftp":
   elif a[0]=="rm":remote(a[1]).unlink()
   elif a[0]=="rmdir":remote(a[1]).rmdir()
   else:raise AssertionError(a)
+elif name=="openssl":
+ if args[0]=="s_client":print("synthetic certificate")
+ elif args[0]=="x509":pathlib.Path(args[args.index("-out")+1]).write_bytes(b"synthetic DER")
+ else:raise AssertionError(args)
 elif name=="wg":
  if args==["--version"]:print("wireguard-tools fixture")
  elif args==["show","interfaces"]:
@@ -257,7 +261,7 @@ elif name=="ip":
  else:raise AssertionError(args)
 '''
         (self.path/"manifest-test.json").write_text(json.dumps(self.manifest))
-        for name in ("ssh", "sftp", "sudo", "wg", "wg-quick", "ip", "wireguard-go", "ifconfig", "route", "bash"):
+        for name in ("ssh", "sftp", "sudo", "wg", "wg-quick", "ip", "wireguard-go", "ifconfig", "route", "bash", "openssl"):
             path = self.bin/name
             path.write_text("#!"+sys.executable+"\n"+dispatch)
             path.chmod(0o755)
@@ -476,6 +480,72 @@ elif name=="ip":
         self.assertTrue((self.path/"tunnel-active").exists())
         self.call("disconnect",code="DISCONNECTED")
         self.assertFalse((self.path/"tunnel-active").exists())
+
+    def hub_manifest(self):
+        self.manifest.update(schema_version=2,tool_version='2.0.0',profile='oci-hub',ssh_user='employee',ssh_alias='oci-hub-'+self.manifest['device_id'],vm_hostname='oci-hub-fixture',tunnel_name='wh-1234abcd',desktop_url='https://'+self.manifest['ssh_gateway']+':8443/',tls_certificate_sha256=hashlib.sha256(b'synthetic DER').hexdigest())
+        self.data['manifest.json']=json.dumps(self.manifest).encode()
+        self.bundle()
+        if not WINDOWS:self.stubs()
+
+    def test_hub_native_setup_keeps_same_device_v1_state(self):
+        self.setup()
+        old=self.state/self.manifest['device_id']/'ssh_config'
+        before=old.read_bytes()
+        self.hub_manifest();self.setup()
+        target=self.state/'oci-hub'/self.manifest['device_id']
+        config=(target/'ssh_config').read_text()
+        self.assertIn('User employee',config)
+        self.assertIn('Host oci-hub-'+self.manifest['device_id'],config)
+        wg=next(target.glob('wh-*.conf')).read_text()
+        self.assertIn(':51824',wg);self.assertIn('PersistentKeepalive = 15',wg)
+        self.assertEqual(old.read_bytes(),before)
+
+    def test_hub_unknown_profile_and_fields_rejected(self):
+        self.hub_manifest();self.manifest['profile']='existing'
+        self.data['manifest.json']=json.dumps(self.manifest).encode();self.bundle()
+        self.call('setup',code='MANIFEST_INVALID')
+        self.hub_manifest();self.manifest['PostUp']='echo no'
+        self.data['manifest.json']=json.dumps(self.manifest).encode();self.bundle()
+        self.call('setup',code='MANIFEST_INVALID')
+
+    @unittest.skipUnless(WINDOWS,'Windows directory junction contract')
+    def test_windows_v2_profile_root_junction_is_rejected(self):
+        self.hub_manifest();self.state.mkdir()
+        target=self.path/'unrelated-target';target.mkdir();marker=target/'preserve.txt';marker.write_text('preserve user data')
+        link=self.state/'oci-hub'
+        subprocess.run(['cmd','/c','mklink','/J',str(link),str(target)],check=True,capture_output=True)
+        self.call('setup','-NoActivate',code='STATE_PATH_UNSAFE')
+        self.assertEqual(marker.read_text(),'preserve user data')
+        self.assertEqual(sorted(p.name for p in target.iterdir()),['preserve.txt'])
+
+    @unittest.skipUnless(WINDOWS,'Windows original root junction contract')
+    def test_windows_v2_original_root_junction_is_still_rejected(self):
+        self.hub_manifest()
+        target=self.path/'unrelated-original-target';target.mkdir();marker=target/'preserve.txt';marker.write_text('preserve user data')
+        subprocess.run(['cmd','/c','mklink','/J',str(self.state),str(target)],check=True,capture_output=True)
+        self.call('setup','-NoActivate',code='STATE_PATH_UNSAFE')
+        self.assertEqual(sorted(p.name for p in target.iterdir()),['preserve.txt'])
+
+    def test_v2_schema_and_runtime_accept_unprefixed_device_id(self):
+        try:
+            import jsonschema
+        except ImportError:
+            self.skipTest('jsonschema unavailable; do not install dependencies automatically')
+        self.hub_manifest();self.manifest.update(device_id='alice',ssh_alias='oci-hub-alice')
+        schema=json.loads((ROOT/'schemas/bundle-manifest.schema.json').read_text())
+        jsonschema.validate(self.manifest,schema)
+        for name in ('bundle-manifest.example.json','bundle-manifest.oci-hub.example.json','bundle-manifest.v1.example.json'):
+            jsonschema.validate(json.loads((ROOT/'examples'/name).read_text()),schema)
+        self.data['manifest.json']=json.dumps(self.manifest).encode();self.bundle()
+        self.setup()
+        self.assertTrue((self.state/'oci-hub'/'alice'/'ssh_config').exists())
+        bad=dict(self.manifest,device_id='alice;bad')
+        with self.assertRaises(jsonschema.ValidationError):jsonschema.validate(bad,schema)
+
+    @unittest.skipIf(WINDOWS,'TLS fixture uses Unix openssl stub; Windows needs synthetic TLS server')
+    def test_hub_verify_reuses_session_and_target_tls_pin(self):
+        self.hub_manifest();self.call('setup',code='CONFIGURED')
+        self.call('verify',code='CONNECTION_VERIFIED')
 
 if __name__=="__main__":
     unittest.main()
