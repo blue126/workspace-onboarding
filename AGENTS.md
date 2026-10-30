@@ -17,7 +17,7 @@ Mosh 试用按 [客户端安装、连接与验证](docs/mosh.md) 执行。先识
 
 verify 后按 [必含信息](docs/after-verify.md) 交接：先给 SSH connect 命令，再指导 VM 内启动浏览器和 workspace-login；禁止项加粗。保留自主表述，不省略这些信息，不先让员工打开未启动的 noVNC。
 
-同一设备重跑时复用原 device bundle 和设备身份；不要重新生成密钥或申请另一台 VM。先核对旧隧道冲突，再按当前 CLI 指引继续。
+普通同设备重跑复用原 device bundle 和设备身份。收到管理员明确的迁移／更新链接时，必须使用此次链接和 SHA256 对应的新包；不要复用缓存旧包、旧地址、旧密钥或仅修改旧隧道 Endpoint。默认接收目录中的旧三件套先保留到独立目录，避免新旧文件混用。按新包 profile 创建独立状态与 SSH 配置；确认归属并获员工授权后，仅停用本工作区旧隧道，不删除旧文件或操作其他 VPN。先按新包 verify，通过后才执行管理员另行明确的加速测试。交接时展示实际 profile、Endpoint、SSH 目标及桌面地址，不展示密钥。不要自行生成密钥或申请另一台 VM。
 
 OCI Hub v2 设备包显式声明 `profile=oci-hub`，使用独立 `devices/oci-hub/<device_id>` 状态、`wh-` 隧道和 `oci-hub-<device_id>` SSH alias。目标为本人 VM 的 `employee` native SSH；员工 WireGuard 使用 51824/15 秒。严格核对目标 SSH host pin；桌面模式另核对 HTTPS 证书 SHA256；v1 原入口继续可用。未知版本、profile 或字段均拒绝。细节见 [OCI Hub 接入](docs/oci-hub.md)。
 
