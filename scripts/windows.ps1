@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('check','setup','verify','connect','sftp','disconnect')][string]$Action='check',
+    [ValidateSet('check','setup','verify','connect','sftp','disconnect','mosh')][string]$Action='check',
     [string]$Bundle,
     [string]$Sha256,
     [string]$StateRoot,
@@ -198,14 +198,37 @@ try {
         }
     } finally { $zip.Dispose() }
     $manifest=Get-Content -LiteralPath (Join-Path $stage 'manifest.json') -Raw | ConvertFrom-Json
-    $fields=@('schema_version','tool_version','device_id','vm_hostname','ssh_gateway','wireguard_address','wireguard_public_key','client_wireguard_public_key','wireguard_endpoint','tunnel_name')
+    $profileName='existing'; $sshUser=$manifest.device_id; $sshAlias='workspace'; $wgPort=51820; $wgKeepalive=25
+    $tunnelPattern='^ws-[a-f0-9]{8}$'; $vmPattern='^employee-[a-z0-9-]{1,40}$'
+    $extraFields=@(); $accessMode='desktop'
+    if($manifest.schema_version -eq 2 -and $manifest.tool_version -ceq '2.0.0') {
+        $extraFields=@('profile','ssh_user','ssh_alias')
+        foreach($field in $extraFields) { if(!$manifest.PSObject.Properties[$field]) { Stop-Setup 'MANIFEST_INVALID' 'Missing native SSH field.' } }
+        if($manifest.profile -cne 'oci-hub' -or $manifest.ssh_user -cne 'employee' -or $manifest.ssh_alias -cne ('oci-hub-'+$manifest.device_id)) { Stop-Setup 'MANIFEST_INVALID' 'Invalid native SSH profile.' }
+        if($manifest.PSObject.Properties['access_mode']) { $accessMode=$manifest.access_mode }
+        if($accessMode -ceq 'mosh') {
+            if(!$manifest.PSObject.Properties['mosh_ports']) { Stop-Setup 'MANIFEST_INVALID' 'Missing Mosh ports.' }
+            $extraFields+=@('access_mode','mosh_ports')
+            if($manifest.mosh_ports -cnotmatch '^(6[01][0-9]{3}):(6[01][0-9]{3})$') { Stop-Setup 'MANIFEST_INVALID' 'Invalid Mosh ports.' }
+            $ports=$manifest.mosh_ports.Split(':')
+            if([int]$ports[0] -gt [int]$ports[1] -or [int]$ports[1] -gt 61000) { Stop-Setup 'MANIFEST_INVALID' 'Invalid Mosh range.' }
+            $vmPattern='^(employee|oci-hub)-[a-z0-9-]{1,40}$'
+        } elseif($accessMode -ceq 'desktop') {
+            if(!$manifest.PSObject.Properties['desktop_url'] -or !$manifest.PSObject.Properties['tls_certificate_sha256']) { Stop-Setup 'MANIFEST_INVALID' 'Missing desktop identity.' }
+            $extraFields+=@('desktop_url','tls_certificate_sha256')
+            if($manifest.desktop_url -cne ('https://'+$manifest.ssh_gateway+':8443/') -or $manifest.tls_certificate_sha256 -cnotmatch '^[a-f0-9]{64}$') { Stop-Setup 'MANIFEST_INVALID' 'Invalid desktop identity.' }
+            $vmPattern='^oci-hub-[a-z0-9-]{1,40}$'
+        } else { Stop-Setup 'MANIFEST_INVALID' 'Unsupported access mode.' }
+        $profileName='oci-hub'; $sshUser='employee'; $sshAlias=$manifest.ssh_alias; $wgPort=51824; $wgKeepalive=15
+        $tunnelPattern='^wh-[a-f0-9]{8}$'
+    } elseif($manifest.schema_version -ne 1 -or $manifest.tool_version -cne '1.0.0') { Stop-Setup 'PACKAGE_VERSION_UNSUPPORTED' 'Unsupported bundle version.' }
+    $fields=@('schema_version','tool_version','device_id','vm_hostname','ssh_gateway','wireguard_address','wireguard_public_key','client_wireguard_public_key','wireguard_endpoint','tunnel_name')+$extraFields
     if(@($manifest.PSObject.Properties).Count -ne $fields.Count) { Stop-Setup 'MANIFEST_INVALID' 'Unexpected manifest properties.' }
     foreach($field in $fields) {
         if(!$manifest.PSObject.Properties[$field] -or [string]$manifest.$field -match '[\r\n]') { Stop-Setup 'MANIFEST_INVALID' 'Missing or invalid manifest field.' }
     }
-    if($manifest.schema_version -ne 1 -or $manifest.tool_version -cne '1.0.0') { Stop-Setup 'PACKAGE_VERSION_UNSUPPORTED' 'Unsupported bundle version.' }
-    if($manifest.device_id -cnotmatch '^[a-z][a-z0-9-]{0,27}$' -or $manifest.vm_hostname -cnotmatch '^employee-[a-z0-9-]{1,40}$' -or
-       $manifest.tunnel_name -cnotmatch '^ws-[a-f0-9]{8}$' -or $manifest.wireguard_address -cnotmatch '/32$' -or
+    if($manifest.device_id -cnotmatch '^[a-z][a-z0-9-]{0,27}$' -or $manifest.vm_hostname -cnotmatch $vmPattern -or
+       $manifest.tunnel_name -cnotmatch $tunnelPattern -or $manifest.wireguard_address -cnotmatch '/32$' -or
        !(Valid-Ip $manifest.ssh_gateway) -or !(Valid-Ip $manifest.wireguard_endpoint) -or
        !(Valid-Ip ($manifest.wireguard_address -replace '/32$','')) -or
        ($manifest.wireguard_address -replace '/32$','') -ceq $manifest.ssh_gateway) { Stop-Setup 'MANIFEST_INVALID' 'Invalid device identity or IPv4 addressing.' }
@@ -228,16 +251,20 @@ try {
     if((Test-Path -LiteralPath $StateRoot) -and ((Get-Item -LiteralPath $StateRoot).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
         Stop-Setup 'STATE_PATH_UNSAFE' 'Linked state root is not accepted.'
     }
+    if($profileName -ceq 'oci-hub') { $StateRoot=Join-Path $StateRoot 'oci-hub' }
+    if((Test-Path -LiteralPath $StateRoot) -and ((Get-Item -LiteralPath $StateRoot).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+        Stop-Setup 'STATE_PATH_UNSAFE' 'Linked profile state root is not accepted.'
+    }
     $state=Join-Path $StateRoot $manifest.device_id
     $stateSsh=$state.Replace('\','/')
     $config=Join-Path $state 'ssh_config'
     $serviceName='WireGuardTunnel$'+$manifest.tunnel_name
-    $wgConf="[Interface]`nPrivateKey = $wgPrivate`nAddress = $($manifest.wireguard_address)`n`n[Peer]`nPublicKey = $($manifest.wireguard_public_key)`nEndpoint = $($manifest.wireguard_endpoint):51820`nAllowedIPs = $($manifest.ssh_gateway)/32`nPersistentKeepalive = 25`n"
+    $wgConf="[Interface]`nPrivateKey = $wgPrivate`nAddress = $($manifest.wireguard_address)`n`n[Peer]`nPublicKey = $($manifest.wireguard_public_key)`nEndpoint = $($manifest.wireguard_endpoint):$wgPort`nAllowedIPs = $($manifest.ssh_gateway)/32`nPersistentKeepalive = $wgKeepalive`n"
     Write-Utf8 (Join-Path $stage ($manifest.tunnel_name+'.conf')) $wgConf
     $sshConf=@"
-Host workspace
+Host $sshAlias
     HostName $($manifest.ssh_gateway)
-    User $($manifest.device_id)
+    User $sshUser
     Port 22
     IdentityFile "$stateSsh/client-key"
     UserKnownHostsFile "$stateSsh/known_hosts"
@@ -303,19 +330,38 @@ Host workspace
             if($service) { Require-OwnedService $service; Stop-Service -Name $serviceName }
             Report 'DISCONNECTED'
         }
-        'connect' { Require-Installed; & $sshCommand.Source -F $config -tt workspace; exit $LASTEXITCODE }
-        'sftp' { Require-Installed; & $sftpCommand.Source -F $config workspace; exit $LASTEXITCODE }
+        'mosh' { Require-Installed; Stop-Setup 'MOSH_WSL_REQUIRED' 'Use Mosh in WSL with this device native SSH config and port assignment; see docs/mosh.md. Do not start a second VPN in WSL.' }
+        'connect' { Require-Installed; & $sshCommand.Source -F $config -tt $sshAlias; exit $LASTEXITCODE }
+        'sftp' { Require-Installed; & $sftpCommand.Source -F $config $sshAlias; exit $LASTEXITCODE }
         'verify' {
             Require-Installed
             if(!(Admin)) { Stop-Setup 'NEEDS_ADMIN' 'Run the same verify command in an employee-approved elevated PowerShell.' }
             if(!(Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'WireGuard/wg.exe'))) { Stop-Setup 'DEPENDENCY_MISSING' 'WireGuard CLI is missing.' }
             $nonce=[Guid]::NewGuid().ToString('N')
             $prefix='WS_'+$nonce
+            if($profileName -ceq 'oci-hub' -and $accessMode -ceq 'desktop') {
+                $tcp=New-Object Net.Sockets.TcpClient
+                try {
+                    $task=$tcp.ConnectAsync($manifest.ssh_gateway,8443)
+                    if(!$task.Wait(15000)) { throw 'Target TLS timeout.' }
+                    $expectedPin=$manifest.tls_certificate_sha256
+                    $callback=[Net.Security.RemoteCertificateValidationCallback]{ param($sender,$certificate,$chain,$errors)
+                        $algorithm=[Security.Cryptography.SHA256]::Create()
+                        try { return [BitConverter]::ToString($algorithm.ComputeHash($certificate.GetRawCertData())).Replace('-','').ToLowerInvariant() -ceq $expectedPin }
+                        finally { $algorithm.Dispose() }
+                    }
+                    $tls=New-Object Net.Security.SslStream($tcp.GetStream(),$false,$callback)
+                    $tls.ReadTimeout=15000; $tls.WriteTimeout=15000
+                    $tls.AuthenticateAsClient($manifest.ssh_gateway)
+                    $tls.Dispose()
+                } catch { Stop-Setup 'TLS_PIN_FAILED' 'Target TLS identity verification failed.' }
+                finally { $tcp.Dispose() }
+            }
             $source=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'verify-session.py')).Replace('__PREFIX__',$prefix).Replace('__VM__',$manifest.vm_hostname)
             $payload=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($source))
             if($payload.Length -ge 3500) { Stop-Setup 'SSH_PROTOCOL_FAILED' 'Verification payload exceeds the PTY line limit.' }
             $remote="stty -echo; exec python3 -c 'import base64;exec(base64.b64decode(`"$payload`"))' </dev/null`n"
-            $connection=Native $sshCommand.Source @('-F',$config,'-tt','workspace') $remote 60000
+            $connection=Native $sshCommand.Source @('-F',$config,'-tt',$sshAlias) $remote 60000
             if($connection.TimedOut) { Stop-Setup 'VERIFY_TIMEOUT' 'SSH verification exceeded 60 seconds; stop and report this code.' }
             if($connection.ExitCode -ne 0) {
                 if($connection.Err -match 'Host key verification failed|REMOTE HOST IDENTIFICATION HAS CHANGED') { Stop-Setup 'SSH_HOST_KEY_MISMATCH' 'Host pin verification failed.' }
@@ -359,12 +405,12 @@ Host workspace
             $remoteDir='/tmp/ws-onboarding-'+$nonce
             $batch=Join-Path $stage 'batch.txt'
             Write-Utf8 $batch ("mkdir $remoteDir`nput `"$($probe.Replace('\','/'))`" $remoteDir/probe.txt`nget $remoteDir/probe.txt `"$($returned.Replace('\','/'))`"`n")
-            $transfer=Native $sftpCommand.Source @('-F',$config,'-b',$batch,'workspace') '' 30000
+            $transfer=Native $sftpCommand.Source @('-F',$config,'-b',$batch,$sshAlias) '' 30000
             if($transfer.TimedOut) { Stop-Setup 'VERIFY_TIMEOUT' 'SFTP verification exceeded 30 seconds; stop and report this code.' }
             if($transfer.ExitCode -ne 0) { Stop-Setup 'SFTP_ROUNDTRIP_FAILED' 'SFTP roundtrip failed; unverified files left untouched.' }
             if((Hash-File $probe) -cne (Hash-File $returned)) { Stop-Setup 'SFTP_CONTENT_MISMATCH' 'SFTP content mismatch; test directory preserved.' }
             Write-Utf8 $batch ("rm $remoteDir/probe.txt`nrmdir $remoteDir`n")
-            $cleanup=Native $sftpCommand.Source @('-F',$config,'-b',$batch,'workspace') '' 30000
+            $cleanup=Native $sftpCommand.Source @('-F',$config,'-b',$batch,$sshAlias) '' 30000
             if($cleanup.TimedOut) { Stop-Setup 'VERIFY_TIMEOUT' 'SFTP cleanup exceeded 30 seconds; stop and report this code.' }
             if($cleanup.ExitCode -ne 0) { Stop-Setup 'SFTP_CLEANUP_FAILED' 'This test directory could not be cleaned.' }
             $result.sftp_roundtrip='passed'

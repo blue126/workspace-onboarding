@@ -2,6 +2,34 @@
 
 本次目标是体验打字、退格、Ctrl-C 和短暂断网后的恢复。**无需登录 Claude 即可完成终端试用。** Mosh 用于交互终端，文件传输继续使用仓库的 SFTP 入口。
 
+## OCI Hub 终端模式
+
+若经过校验的 v2 包声明 `profile=oci-hub`、`access_mode=mosh`，使用本节。设备与 VM 各自连接 OCI；本机仍需保持 WireGuard 开启。连接分配的独立工作区 VM，新方案状态在 `~/EmployeeWorkspace/devices/oci-hub/<device_id>/`；保留旧包和旧状态用于回退。
+
+包内 `mosh_ports` 就是本设备分配，启动器为 VM 内 `workspace-mosh`。不套用下面旧网关的 `employee-mosh` 或 `workspace` alias。此模式无新增桌面 URL/TLS pin，verify 校验原生 SSH/SFTP 和目标 VM；verify 通过不代表已体验 Mosh。
+
+macOS/Linux 完成标准 check → setup → verify 后，在本人交互终端运行：
+
+```bash
+bash ./bootstrap.sh connect
+# 退出 SSH 后，从同一个本机源码目录运行：
+bash ./bootstrap.sh mosh
+```
+
+脚本从本设备包读取端口、alias 和 SSH 配置，保持严格主机校验。出现 `MOSH_CLIENT_MISSING` 时按下表取得安装授权并安装客户端；出现 `INTERACTIVE_TERMINAL_REQUIRED` 时，由 Agent 打开本人的交互终端运行同一命令，不通过管道驱动 Mosh 或记录握手输出。没有本次原生 Mosh 分配会返回 `MOSH_NOT_CONFIGURED`。
+
+Windows 用原生 PowerShell 完成 check/setup/verify/connect；`bootstrap.ps1 mosh` 返回 `MOSH_WSL_REQUIRED`。按下面 WSL 约定只适配这一设备的新方案 SSH 配置、key、known_hosts 到本人 Linux 目录，保留 host pin 和 `oci-hub-<device_id>` alias；在 WSL 运行：
+
+```bash
+mosh --ssh='ssh -F "<WSL内本设备ssh_config绝对路径>"' --server=workspace-mosh --port='<包内mosh_ports>' 'oci-hub-<包内device_id>'
+```
+
+Agent 将模板替换为实际值后再交给本人。WSL 共用 Windows VPN，不执行 Linux WireGuard setup。接下来仍按本页固定验收表核对本人 VM、输入与重连；服务端版本命令改为新 alias 下的 `workspace-mosh --version`。本次可以跳过 Claude 登录；需要时先 SSH 进入 VM 再运行 `workspace-login`，不主动打开桌面或本机 Claude 授权页面。此终端包没有新增桌面通道；需要图形认证时沿用已验证的原桌面入口，缺少可用入口则交管理员处理，不猜测 URL 或修改证书。
+
+## 旧网关模式
+
+以下步骤适用于原 v1 包与 `employee-mosh` 网关命令。
+
 ## 1. 确认接入和设备身份
 
 先按 README 检查已有设备包与已安装配置。同一设备复用原身份；原 ZIP 已删除但已安装配置完整时，不必重做 setup。缺少必要文件时，从员工提示词提供的私人下载链接按 [下载指引](download.md) 恢复；缺少链接或链接失效时请管理员补发，不重新开户或生成密钥。

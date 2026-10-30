@@ -1,0 +1,17 @@
+{
+  "schema_version": 2,
+  "tool_version": "2.0.0",
+  "device_id": "alice",
+  "vm_hostname": "oci-hub-fixture",
+  "ssh_gateway": "10.234.0.2",
+  "wireguard_address": "10.235.0.2/32",
+  "wireguard_endpoint": "203.0.113.10",
+  "tunnel_name": "wh-83afc19e",
+  "wireguard_public_key": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+  "client_wireguard_public_key": "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI=",
+  "profile": "oci-hub",
+  "ssh_user": "employee",
+  "ssh_alias": "oci-hub-alice",
+  "desktop_url": "https://10.234.0.2:8443/",
+  "tls_certificate_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+}

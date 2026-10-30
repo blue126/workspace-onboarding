@@ -43,7 +43,7 @@ while [[ $# -gt 0 ]]; do
         *) fail INVALID_ARGUMENT "未知参数；请阅读 README。" ;;
     esac
 done
-case "$action" in check|setup|verify|connect|sftp|disconnect) ;; *) fail INVALID_ACTION "动作：check/setup/verify/connect/sftp/disconnect。" ;; esac
+case "$action" in check|setup|verify|connect|sftp|disconnect|mosh) ;; *) fail INVALID_ACTION "动作：check/setup/verify/connect/sftp/disconnect/mosh。" ;; esac
 if $install_clients; then [[ "$action" == setup ]] || fail INVALID_ARGUMENT "只有 setup 可以安装客户端。"; fi
 require_tunnel_admin() {
     if ! sudo -n true >/dev/null 2>&1; then
@@ -104,7 +104,7 @@ hash_file() {
 if [[ -z "$expected_sha" ]]; then
     [[ -n "$bundle_dir" ]] || fail PACKAGE_HASH_REQUIRED "外部设备包必须提供 --sha256。"
     [[ -f "$bundle" && ! -L "$bundle" && -f "$bundle_dir/device-bundle.sha256" && ! -L "$bundle_dir/device-bundle.sha256" ]] ||
-        fail PACKAGE_MISSING "请先把 OneDrive 中本设备的三份文件下载到 ~/Downloads/employee-workspace/；找不到时可使用项目 deployment/。"
+        fail PACKAGE_MISSING "请先从管理员提供的私人链接下载接入包，仅解开外层 ZIP，并将三份文件保存到 ~/Downloads/employee-workspace/；找不到时可使用项目 deployment/。"
     expected_sha="$(tr -d '\r\n' < "$bundle_dir/device-bundle.sha256")"
 fi
 [[ "$expected_sha" =~ ^[a-f0-9]{64}$ ]] || fail PACKAGE_HASH_INVALID "设备包摘要格式无效。"
@@ -137,16 +137,50 @@ peer="$(json_get wireguard_public_key)" || fail MANIFEST_INVALID "manifest 缺�
 client_public="$(json_get client_wireguard_public_key)" || fail MANIFEST_INVALID "manifest 缺少设备公钥。"
 endpoint="$(json_get wireguard_endpoint)" || fail MANIFEST_INVALID "manifest 缺少 Endpoint。"
 tunnel="$(json_get tunnel_name)" || fail MANIFEST_INVALID "manifest 缺少隧道名。"
-expected_fields="$(printf '%s\n' schema_version tool_version device_id vm_hostname ssh_gateway wireguard_address wireguard_public_key client_wireguard_public_key wireguard_endpoint tunnel_name | sort)"
+profile=existing
+ssh_user="$device"
+ssh_alias=workspace
+wg_port=51820
+wg_keepalive=25
+vnet_pattern='^ws-[a-f0-9]{8}$'
+vm_pattern='^employee-[a-z0-9-]{1,40}$'
+extra_fields=""
+access_mode=desktop
+mosh_ports=""
+if [[ "$schema" == 2 && "$tool_version" == 2.0.0 ]]; then
+    profile="$(json_get profile)" || fail MANIFEST_INVALID "Missing profile."
+    ssh_user="$(json_get ssh_user)" || fail MANIFEST_INVALID "Missing native SSH user."
+    ssh_alias="$(json_get ssh_alias)" || fail MANIFEST_INVALID "Missing profile alias."
+    [[ "$profile" == oci-hub && "$ssh_user" == employee && "$ssh_alias" == "oci-hub-$device" ]] || fail MANIFEST_INVALID "Invalid native SSH profile."
+    access_mode="$(json_get access_mode || printf desktop)"
+    if [[ "$access_mode" == mosh ]]; then
+        mosh_ports="$(json_get mosh_ports)" || fail MANIFEST_INVALID "Missing device Mosh ports."
+        [[ "$mosh_ports" =~ ^(6[01][0-9]{3}):(6[01][0-9]{3})$ ]] || fail MANIFEST_INVALID "Invalid Mosh ports."
+        [[ "${mosh_ports%:*}" -le "${mosh_ports#*:}" && "${mosh_ports#*:}" -le 61000 ]] || fail MANIFEST_INVALID "Invalid Mosh range."
+        vm_pattern='^(employee|oci-hub)-[a-z0-9-]{1,40}$'
+        extra_fields="$(printf '%s\n' profile ssh_user ssh_alias access_mode mosh_ports)"
+    elif [[ "$access_mode" == desktop ]]; then
+        desktop_url="$(json_get desktop_url)" || fail MANIFEST_INVALID "Missing target desktop URL."
+        tls_pin="$(json_get tls_certificate_sha256)" || fail MANIFEST_INVALID "Missing target TLS pin."
+        [[ "$desktop_url" == "https://$gateway:8443/" && "$tls_pin" =~ ^[a-f0-9]{64}$ ]] || fail MANIFEST_INVALID "Invalid desktop identity."
+        vm_pattern='^oci-hub-[a-z0-9-]{1,40}$'
+        extra_fields="$(printf '%s\n' profile ssh_user ssh_alias desktop_url tls_certificate_sha256)"
+    else fail MANIFEST_INVALID "Unsupported access mode."; fi
+    wg_port=51824
+    wg_keepalive=15
+    vnet_pattern='^wh-[a-f0-9]{8}$'
+elif [[ "$schema" != 1 || "$tool_version" != 1.0.0 ]]; then
+    fail PACKAGE_VERSION_UNSUPPORTED "Unsupported bundle version."
+fi
+expected_fields="$(printf '%s\n' schema_version tool_version device_id vm_hostname ssh_gateway wireguard_address wireguard_public_key client_wireguard_public_key wireguard_endpoint tunnel_name $extra_fields | sort)"
 if [[ "$platform" == macos ]]; then
     actual_fields="$(/usr/bin/plutil -convert xml1 -o - "$stage/manifest.json" 2>/dev/null | awk -F '[<>]' '/<key>/ {print $3}' | sort)"
 else
     actual_fields="$(jq -r 'keys[]' "$stage/manifest.json" 2>/dev/null | sort)"
 fi
 [[ "$actual_fields" == "$expected_fields" ]] || fail MANIFEST_INVALID "Unexpected manifest fields."
-[[ "$schema" == 1 && "$tool_version" == 1.0.0 ]] || fail PACKAGE_VERSION_UNSUPPORTED "设备包版本与工具不匹配。"
-[[ "$device" =~ ^[a-z][a-z0-9-]{0,27}$ && "$vm_hostname" =~ ^employee-[a-z0-9-]{1,40}$ &&
-   "$tunnel" =~ ^ws-[a-f0-9]{8}$ && "$peer" =~ ^[A-Za-z0-9+/]{43}=$ &&
+[[ "$device" =~ ^[a-z][a-z0-9-]{0,27}$ && "$vm_hostname" =~ $vm_pattern &&
+   "$tunnel" =~ $vnet_pattern && "$peer" =~ ^[A-Za-z0-9+/]{43}=$ &&
    "$client_public" =~ ^[A-Za-z0-9+/]{43}=$ ]] || fail MANIFEST_INVALID "设备或公钥格式无效。"
 valid_ip() {
     local value="$1" part
@@ -181,6 +215,7 @@ while [[ ! -d "$parent" ]]; do
     parent="$(dirname "$parent")"
 done
 state_root="$(cd "$parent" && pwd -P)$suffix"
+if [[ "$profile" == oci-hub ]]; then state_root="$state_root/oci-hub"; fi
 state="$state_root/$device"
 case "$state_root/" in "$repo_dir/"*) fail STATE_IN_REPOSITORY "Install state outside this repository." ;; esac
 if [[ -d "$state_root" ]]; then
@@ -237,14 +272,14 @@ Address = $address
 
 [Peer]
 PublicKey = $peer
-Endpoint = $endpoint:51820
+Endpoint = $endpoint:$wg_port
 AllowedIPs = $gateway/32
-PersistentKeepalive = 25
+PersistentKeepalive = $wg_keepalive
 EOF
     cat > "$stage/ssh_config" <<EOF
-Host workspace
+Host $ssh_alias
     HostName $gateway
-    User $device
+    User $ssh_user
     Port 22
     IdentityFile "$state/client-key"
     UserKnownHostsFile "$state/known_hosts"
@@ -395,12 +430,25 @@ case "$action" in
             check_new_tunnel_route
         fi
         report DISCONNECTED ;;
+    mosh)
+        require_installed
+        [[ "$profile" == oci-hub && "$access_mode" == mosh ]] || fail MOSH_NOT_CONFIGURED "This bundle has no native Mosh assignment."
+        command -v mosh >/dev/null && command -v mosh-client >/dev/null || fail MOSH_CLIENT_MISSING "Install Mosh in this terminal environment with user approval; see docs/mosh.md."
+        # Mosh is interactive: never run it through a pipe or record its handshake key.
+        [[ -t 0 && -t 1 ]] || fail INTERACTIVE_TERMINAL_REQUIRED "Run this same mosh command in the user's interactive terminal."
+        config="$state/ssh_config"
+        cleanup
+        stage=""
+        # --ssh is parsed as a command by Mosh; quote the path as shell data.
+        quoted_config="$(jq -nr --arg path "$config" '$path|@sh')"
+        exec mosh --ssh="ssh -F $quoted_config" --server=workspace-mosh --port="$mosh_ports" "$ssh_alias"
+        ;;
     connect|sftp)
         require_installed
         cleanup
         stage=""
-        if [[ "$action" == connect ]]; then exec ssh -F "$state/ssh_config" -tt workspace
-        else exec sftp -F "$state/ssh_config" workspace; fi ;;
+        if [[ "$action" == connect ]]; then exec ssh -F "$state/ssh_config" -tt "$ssh_alias"
+        else exec sftp -F "$state/ssh_config" "$ssh_alias"; fi ;;
     verify)
         require_installed
         $client_ready || fail DEPENDENCY_MISSING "缺少 WireGuard CLI。"
@@ -410,10 +458,16 @@ case "$action" in
         prefix="WS_${nonce}"
         # One complete command fits the PTY line discipline. No queued commands
         # remain for a CLI or shell hook to consume. No gateway command is appended.
+        if [[ "$profile" == oci-hub && "$access_mode" == desktop ]]; then
+            command -v openssl >/dev/null || fail DEPENDENCY_MISSING "TLS pin verification requires openssl."
+            run_bounded 15 openssl s_client -connect "$gateway:8443" -servername "$gateway" < /dev/null > "$stage/tls-peer" 2>/dev/null || fail TLS_PIN_FAILED "Target TLS handshake failed."
+            openssl x509 -in "$stage/tls-peer" -outform DER -out "$stage/tls.der" 2>/dev/null || fail TLS_PIN_FAILED "Target TLS certificate invalid."
+            [[ "$(hash_file "$stage/tls.der")" == "$tls_pin" ]] || fail TLS_PIN_FAILED "Target TLS identity mismatch."
+        fi
         payload="$(sed -e "s/__PREFIX__/$prefix/g" -e "s/__VM__/$vm_hostname/g" "$repo_dir/scripts/verify-session.py" | base64 | tr -d '\r\n')"
         [[ ${#payload} -lt 3500 ]] || fail SSH_PROTOCOL_FAILED "Verification payload exceeds the PTY line limit."
         printf "stty -echo; exec python3 -c 'import base64;exec(base64.b64decode(\"%s\"))' </dev/null\n" "$payload" > "$stage/verify-input"
-        if run_bounded 60 ssh -F "$state/ssh_config" -tt workspace < "$stage/verify-input" > "$stage/ssh-output" 2> "$stage/ssh-error"; then
+        if run_bounded 60 ssh -F "$state/ssh_config" -tt "$ssh_alias" < "$stage/verify-input" > "$stage/ssh-output" 2> "$stage/ssh-error"; then
             connection_status=0
         else connection_status=$?; fi
         [[ "$connection_status" != 124 ]] || fail VERIFY_TIMEOUT "SSH verification exceeded 60 seconds; stop and report this code."
@@ -453,13 +507,13 @@ mkdir $remote_dir
 put "$stage/probe.txt" $remote_dir/probe.txt
 get $remote_dir/probe.txt "$stage/returned.txt"
 EOF
-        if run_bounded 30 sftp -F "$state/ssh_config" -b "$stage/sftp-batch" workspace > "$stage/sftp-output" 2>&1; then transfer_status=0
+        if run_bounded 30 sftp -F "$state/ssh_config" -b "$stage/sftp-batch" "$ssh_alias" > "$stage/sftp-output" 2>&1; then transfer_status=0
         else transfer_status=$?; fi
         [[ "$transfer_status" != 124 ]] || fail VERIFY_TIMEOUT "SFTP verification exceeded 30 seconds; stop and report this code."
         [[ "$transfer_status" == 0 ]] || fail SFTP_ROUNDTRIP_FAILED "SFTP roundtrip failed; unverified remote content left untouched."
         cmp -s "$stage/probe.txt" "$stage/returned.txt" || fail SFTP_CONTENT_MISMATCH "SFTP content differs; test directory preserved."
         printf 'rm %s/probe.txt\nrmdir %s\n' "$remote_dir" "$remote_dir" > "$stage/sftp-cleanup"
-        if run_bounded 30 sftp -F "$state/ssh_config" -b "$stage/sftp-cleanup" workspace >/dev/null 2>&1; then cleanup_status=0
+        if run_bounded 30 sftp -F "$state/ssh_config" -b "$stage/sftp-cleanup" "$ssh_alias" >/dev/null 2>&1; then cleanup_status=0
         else cleanup_status=$?; fi
         [[ "$cleanup_status" != 124 ]] || fail VERIFY_TIMEOUT "SFTP cleanup exceeded 30 seconds; stop and report this code."
         [[ "$cleanup_status" == 0 ]] || fail SFTP_CLEANUP_FAILED "Could not clean this test directory; project files untouched."

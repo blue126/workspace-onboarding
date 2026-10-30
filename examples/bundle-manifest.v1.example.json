@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "tool_version": "1.0.0",
+  "device_id": "ed-example-client",
+  "vm_hostname": "employee-example",
+  "ssh_gateway": "10.77.0.1",
+  "wireguard_address": "10.77.0.2/32",
+  "wireguard_endpoint": "203.0.113.10",
+  "tunnel_name": "ws-1234abcd",
+  "wireguard_public_key": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+  "client_wireguard_public_key": "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmI="
+}
