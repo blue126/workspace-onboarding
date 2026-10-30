@@ -547,5 +547,72 @@ elif name=="ip":
         self.hub_manifest();self.call('setup',code='CONFIGURED')
         self.call('verify',code='CONNECTION_VERIFIED')
 
+    def mosh_manifest(self):
+        self.hub_manifest()
+        for field in ('desktop_url','tls_certificate_sha256'):self.manifest.pop(field)
+        self.manifest.update(access_mode='mosh',mosh_ports='60030:60039',vm_hostname='employee-fixture')
+        self.data['manifest.json']=json.dumps(self.manifest).encode();self.bundle()
+        if not WINDOWS:self.stubs()
+
+    def test_terminal_hub_bundle_preserves_v1_state_without_desktop_fields(self):
+        self.setup();old=self.state/self.manifest['device_id']/'ssh_config';saved=old.read_bytes()
+        self.mosh_manifest();self.setup()
+        self.assertEqual(old.read_bytes(),saved)
+        native=self.state/'oci-hub'/self.manifest['device_id']
+        self.assertIn('User employee',(native/'ssh_config').read_text())
+        self.assertFalse('desktop_url' in json.loads((native/'manifest.json').read_text()))
+
+    def test_terminal_mosh_ports_and_extra_desktop_fields_rejected(self):
+        self.mosh_manifest()
+        for ports in ('59999:60000','60039:60030','60030:61001','60030:60039;id'):
+            self.manifest['mosh_ports']=ports;self.data['manifest.json']=json.dumps(self.manifest).encode();self.bundle()
+            self.call('check',code='MANIFEST_INVALID')
+        self.manifest['mosh_ports']='60030:60039';self.manifest['desktop_url']='https://10.77.0.1:8443/'
+        self.data['manifest.json']=json.dumps(self.manifest).encode();self.bundle()
+        self.call('check',code='MANIFEST_INVALID')
+
+    @unittest.skipIf(WINDOWS,'Native SSH verification fixture uses Unix command stubs')
+    def test_terminal_verify_does_not_require_desktop_tls(self):
+        self.mosh_manifest();self.call('setup',code='CONFIGURED')
+        self.call('verify',code='CONNECTION_VERIFIED')
+        commands=[json.loads(line)[0] for line in (self.path/'commands.jsonl').read_text().splitlines()]
+        self.assertNotIn('openssl',commands)
+
+    def test_terminal_mosh_needs_interactive_terminal_or_wsl(self):
+        self.mosh_manifest();self.setup()
+        if WINDOWS:
+            self.call('mosh',code='MOSH_WSL_REQUIRED');return
+        for program in ('mosh','mosh-client'):
+            p=self.bin/program;p.write_text('#!/bin/sh\nexit 0\n');p.chmod(0o755)
+        self.call('mosh',code='INTERACTIVE_TERMINAL_REQUIRED')
+
+    @unittest.skipIf(WINDOWS,'POSIX interactive terminal fixture')
+    def test_terminal_mosh_launcher_reads_ports_and_alias_from_approved_bundle(self):
+        import pty, shlex
+        self.state=self.path/"private ' $(false)"
+        self.mosh_manifest();self.setup()
+        p=self.bin/'mosh';p.write_text('#!/usr/bin/env python3\nimport json,os,pathlib,sys\n(pathlib.Path(os.environ["FIXTURE"])/"mosh-args.json").write_text(json.dumps(sys.argv[1:]))\n');p.chmod(0o755)
+        p=self.bin/'mosh-client';p.write_text('#!/bin/sh\nexit 0\n');p.chmod(0o755)
+        master,slave=pty.openpty()
+        try:
+            result=subprocess.run(self.command('mosh'),env=self.env,stdin=slave,stdout=slave,stderr=subprocess.PIPE,text=True,timeout=20)
+            self.assertEqual(result.returncode,0,result.stderr)
+        finally:os.close(slave);os.close(master)
+        args=json.loads((self.path/'mosh-args.json').read_text())
+        self.assertIn('--server=workspace-mosh',args);self.assertIn('--port=60030:60039',args)
+        self.assertEqual(args[-1],'oci-hub-'+self.manifest['device_id'])
+        ssh_command=next(arg[len('--ssh='):] for arg in args if arg.startswith('--ssh='))
+        expected=str((self.state/'oci-hub'/self.manifest['device_id']/'ssh_config').resolve())
+        self.assertEqual(shlex.split(ssh_command),['ssh','-F',expected])
+
+    def test_terminal_schema_accepts_existing_vm_hostname(self):
+        try:import jsonschema
+        except ImportError:self.skipTest('jsonschema unavailable; do not install automatically')
+        self.mosh_manifest()
+        schema=json.loads((ROOT/'schemas/bundle-manifest.schema.json').read_text())
+        jsonschema.validate(self.manifest,schema)
+        example=json.loads((ROOT/'examples/bundle-manifest.oci-hub-mosh.example.json').read_text())
+        jsonschema.validate(example,schema)
+
 if __name__=="__main__":
     unittest.main()

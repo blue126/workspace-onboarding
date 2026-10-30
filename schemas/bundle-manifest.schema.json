@@ -140,6 +140,86 @@
           "pattern": "^[a-f0-9]{64}$"
         }
       }
+    },
+    {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "OCI Hub terminal-only Mosh bundle v2",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "tool_version",
+        "device_id",
+        "vm_hostname",
+        "ssh_gateway",
+        "wireguard_address",
+        "wireguard_endpoint",
+        "tunnel_name",
+        "wireguard_public_key",
+        "client_wireguard_public_key",
+        "profile",
+        "ssh_user",
+        "ssh_alias",
+        "access_mode",
+        "mosh_ports"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": 2
+        },
+        "tool_version": {
+          "const": "2.0.0"
+        },
+        "device_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,27}$"
+        },
+        "vm_hostname": {
+          "type": "string",
+          "pattern": "^(employee|oci-hub)-[a-z0-9-]{1,40}$"
+        },
+        "ssh_gateway": {
+          "type": "string",
+          "format": "ipv4"
+        },
+        "wireguard_address": {
+          "type": "string",
+          "pattern": "^[0-9.]+/32$"
+        },
+        "wireguard_endpoint": {
+          "type": "string",
+          "format": "ipv4"
+        },
+        "tunnel_name": {
+          "type": "string",
+          "pattern": "^wh-[a-f0-9]{8}$"
+        },
+        "wireguard_public_key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]{43}=$"
+        },
+        "client_wireguard_public_key": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]{43}=$"
+        },
+        "profile": {
+          "const": "oci-hub"
+        },
+        "ssh_user": {
+          "const": "employee"
+        },
+        "ssh_alias": {
+          "type": "string",
+          "pattern": "^oci-hub-[a-z][a-z0-9-]{0,27}$"
+        },
+        "access_mode": {
+          "const": "mosh"
+        },
+        "mosh_ports": {
+          "type": "string",
+          "pattern": "^6[01][0-9]{3}:6[01][0-9]{3}$"
+        }
+      }
     }
   ]
 }

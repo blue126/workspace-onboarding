@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('check','setup','verify','connect','sftp','disconnect')][string]$Action='check',
+    [ValidateSet('check','setup','verify','connect','sftp','disconnect','mosh')][string]$Action='check',
     [string]$Bundle,
     [string]$Sha256,
     [string]$StateRoot,
@@ -200,14 +200,27 @@ try {
     $manifest=Get-Content -LiteralPath (Join-Path $stage 'manifest.json') -Raw | ConvertFrom-Json
     $profileName='existing'; $sshUser=$manifest.device_id; $sshAlias='workspace'; $wgPort=51820; $wgKeepalive=25
     $tunnelPattern='^ws-[a-f0-9]{8}$'; $vmPattern='^employee-[a-z0-9-]{1,40}$'
-    $extraFields=@()
+    $extraFields=@(); $accessMode='desktop'
     if($manifest.schema_version -eq 2 -and $manifest.tool_version -ceq '2.0.0') {
-        $extraFields=@('profile','ssh_user','ssh_alias','desktop_url','tls_certificate_sha256')
+        $extraFields=@('profile','ssh_user','ssh_alias')
         foreach($field in $extraFields) { if(!$manifest.PSObject.Properties[$field]) { Stop-Setup 'MANIFEST_INVALID' 'Missing native SSH field.' } }
-        if($manifest.profile -cne 'oci-hub' -or $manifest.ssh_user -cne 'employee' -or $manifest.ssh_alias -cne ('oci-hub-'+$manifest.device_id) -or
-           $manifest.desktop_url -cne ('https://'+$manifest.ssh_gateway+':8443/') -or $manifest.tls_certificate_sha256 -cnotmatch '^[a-f0-9]{64}$') { Stop-Setup 'MANIFEST_INVALID' 'Invalid native SSH profile.' }
+        if($manifest.profile -cne 'oci-hub' -or $manifest.ssh_user -cne 'employee' -or $manifest.ssh_alias -cne ('oci-hub-'+$manifest.device_id)) { Stop-Setup 'MANIFEST_INVALID' 'Invalid native SSH profile.' }
+        if($manifest.PSObject.Properties['access_mode']) { $accessMode=$manifest.access_mode }
+        if($accessMode -ceq 'mosh') {
+            if(!$manifest.PSObject.Properties['mosh_ports']) { Stop-Setup 'MANIFEST_INVALID' 'Missing Mosh ports.' }
+            $extraFields+=@('access_mode','mosh_ports')
+            if($manifest.mosh_ports -cnotmatch '^(6[01][0-9]{3}):(6[01][0-9]{3})$') { Stop-Setup 'MANIFEST_INVALID' 'Invalid Mosh ports.' }
+            $ports=$manifest.mosh_ports.Split(':')
+            if([int]$ports[0] -gt [int]$ports[1] -or [int]$ports[1] -gt 61000) { Stop-Setup 'MANIFEST_INVALID' 'Invalid Mosh range.' }
+            $vmPattern='^(employee|oci-hub)-[a-z0-9-]{1,40}$'
+        } elseif($accessMode -ceq 'desktop') {
+            if(!$manifest.PSObject.Properties['desktop_url'] -or !$manifest.PSObject.Properties['tls_certificate_sha256']) { Stop-Setup 'MANIFEST_INVALID' 'Missing desktop identity.' }
+            $extraFields+=@('desktop_url','tls_certificate_sha256')
+            if($manifest.desktop_url -cne ('https://'+$manifest.ssh_gateway+':8443/') -or $manifest.tls_certificate_sha256 -cnotmatch '^[a-f0-9]{64}$') { Stop-Setup 'MANIFEST_INVALID' 'Invalid desktop identity.' }
+            $vmPattern='^oci-hub-[a-z0-9-]{1,40}$'
+        } else { Stop-Setup 'MANIFEST_INVALID' 'Unsupported access mode.' }
         $profileName='oci-hub'; $sshUser='employee'; $sshAlias=$manifest.ssh_alias; $wgPort=51824; $wgKeepalive=15
-        $tunnelPattern='^wh-[a-f0-9]{8}$'; $vmPattern='^oci-hub-[a-z0-9-]{1,40}$'
+        $tunnelPattern='^wh-[a-f0-9]{8}$'
     } elseif($manifest.schema_version -ne 1 -or $manifest.tool_version -cne '1.0.0') { Stop-Setup 'PACKAGE_VERSION_UNSUPPORTED' 'Unsupported bundle version.' }
     $fields=@('schema_version','tool_version','device_id','vm_hostname','ssh_gateway','wireguard_address','wireguard_public_key','client_wireguard_public_key','wireguard_endpoint','tunnel_name')+$extraFields
     if(@($manifest.PSObject.Properties).Count -ne $fields.Count) { Stop-Setup 'MANIFEST_INVALID' 'Unexpected manifest properties.' }
@@ -317,6 +330,7 @@ Host $sshAlias
             if($service) { Require-OwnedService $service; Stop-Service -Name $serviceName }
             Report 'DISCONNECTED'
         }
+        'mosh' { Require-Installed; Stop-Setup 'MOSH_WSL_REQUIRED' 'Use Mosh in WSL with this device native SSH config and port assignment; see docs/mosh.md. Do not start a second VPN in WSL.' }
         'connect' { Require-Installed; & $sshCommand.Source -F $config -tt $sshAlias; exit $LASTEXITCODE }
         'sftp' { Require-Installed; & $sftpCommand.Source -F $config $sshAlias; exit $LASTEXITCODE }
         'verify' {
@@ -325,7 +339,7 @@ Host $sshAlias
             if(!(Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'WireGuard/wg.exe'))) { Stop-Setup 'DEPENDENCY_MISSING' 'WireGuard CLI is missing.' }
             $nonce=[Guid]::NewGuid().ToString('N')
             $prefix='WS_'+$nonce
-            if($profileName -ceq 'oci-hub') {
+            if($profileName -ceq 'oci-hub' -and $accessMode -ceq 'desktop') {
                 $tcp=New-Object Net.Sockets.TcpClient
                 try {
                     $task=$tcp.ConnectAsync($manifest.ssh_gateway,8443)

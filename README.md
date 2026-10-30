@@ -18,7 +18,7 @@
 2. 按 [设备包下载](docs/download.md)，对员工提供的 Temp.sh 链接发送 HTTP POST 下载外层 ZIP；无需网盘账号或浏览器，不能用普通 GET 页面代替下载。失败停止，请管理员核对链接，不反复重试。
 3. 校验管理员通知中的外层 SHA256，确认外层恰好是三个顶层普通文件；创建下方默认接收目录。只保存本次交付，不覆盖已有不同身份。
 4. 仅解开外层 ZIP，把 `device-bundle.zip`、`device-bundle.sha256`、`README.md` 放入默认接收目录；保留内层 `device-bundle.zip`，不要自行展开密钥。
-5. 按 [标准验证](docs/verification.md) 运行 check → setup → verify；连接通过且个人授权待处理时，再 connect 进入 VM，用 workspace-login 交本人完成登录。
+5. 按 [标准验证](docs/verification.md) 运行 check → setup → verify；连接通过后先 connect 进入 VM；终端试点按 Mosh 小节继续并可跳过 Claude。需要个人授权时才用 workspace-login 交本人完成登录。
 
 ## 默认目录
 
@@ -66,6 +66,8 @@ VPN 使用 CLI：macOS 为 Homebrew wireguard-tools，Linux 为 wg-quick，Windo
 
 收到管理员的 Mosh 试用参数后，让本机 Agent 按 [Mosh 安装、连接与验证](docs/mosh.md) 完成设置。先识别当前设备账号，复用现有接入配置；按实际系统安装客户端，再使用该设备分配的端口连接。终端试用以打字响应和断线恢复为主，Claude 登录可跳过。复制给 Agent 的提示词必须包含实际下载链接（需要补包时）、Mosh 服务端命令和该设备端口，不能只写“参考邮件”。
 
+OCI Hub 终端试点包会提供 `access_mode=mosh` 与端口分配；按 [Mosh 的 OCI Hub 小节](docs/mosh.md#oci-hub-终端模式) 操作。macOS/Linux 可运行 `bash ./bootstrap.sh mosh`，Windows 在 WSL 使用同一设备的新方案 SSH 配置。此试点无需先打开桌面或登录 Claude。
+
 ## VM 内的 Claude 与浏览器
 
 先通过 SSH 进入 VM，依次运行 `workspace-browser start`、`workspace-login`；浏览器就绪后再打开 noVNC，在 VM 的 Firefox 内完成个人授权。交接时按 [验证后的必含信息](docs/after-verify.md) 提醒员工；日常浏览器使用 `workspace-browser start/status/stop`。
@@ -88,4 +90,4 @@ VPN 使用 CLI：macOS 为 Homebrew wireguard-tools，Linux 为 wg-quick，Windo
 
 每台电脑使用独立身份，包括同一员工的多台电脑。私密共享链接、设备包和连接单不得写入公开仓库、Issue 或日志。删除文件不等于撤销服务端设备身份。
 
-OCI Hub v2 设备包显式声明 `profile=oci-hub`，使用独立 `devices/oci-hub/<device_id>` 状态、`wh-` 隧道和 `oci-hub-<device_id>` SSH alias。目标为本人 VM 的 `employee` native SSH；员工 WireGuard 使用 51824/15 秒。严格核对目标 SSH host pin 与 HTTPS 证书 SHA256；v1 原入口继续可用。未知版本、profile 或字段均拒绝。细节见 [OCI Hub 接入](docs/oci-hub.md)。
+OCI Hub v2 设备包显式声明 `profile=oci-hub`，使用独立 `devices/oci-hub/<device_id>` 状态、`wh-` 隧道和 `oci-hub-<device_id>` SSH alias。目标为本人 VM 的 `employee` native SSH；员工 WireGuard 使用 51824/15 秒。严格核对目标 SSH host pin；桌面模式另核对 HTTPS 证书 SHA256；v1 原入口继续可用。未知版本、profile 或字段均拒绝。细节见 [OCI Hub 接入](docs/oci-hub.md)。

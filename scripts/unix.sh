@@ -43,7 +43,7 @@ while [[ $# -gt 0 ]]; do
         *) fail INVALID_ARGUMENT "未知参数；请阅读 README。" ;;
     esac
 done
-case "$action" in check|setup|verify|connect|sftp|disconnect) ;; *) fail INVALID_ACTION "动作：check/setup/verify/connect/sftp/disconnect。" ;; esac
+case "$action" in check|setup|verify|connect|sftp|disconnect|mosh) ;; *) fail INVALID_ACTION "动作：check/setup/verify/connect/sftp/disconnect/mosh。" ;; esac
 if $install_clients; then [[ "$action" == setup ]] || fail INVALID_ARGUMENT "只有 setup 可以安装客户端。"; fi
 require_tunnel_admin() {
     if ! sudo -n true >/dev/null 2>&1; then
@@ -104,7 +104,7 @@ hash_file() {
 if [[ -z "$expected_sha" ]]; then
     [[ -n "$bundle_dir" ]] || fail PACKAGE_HASH_REQUIRED "外部设备包必须提供 --sha256。"
     [[ -f "$bundle" && ! -L "$bundle" && -f "$bundle_dir/device-bundle.sha256" && ! -L "$bundle_dir/device-bundle.sha256" ]] ||
-        fail PACKAGE_MISSING "请先把 OneDrive 中本设备的三份文件下载到 ~/Downloads/employee-workspace/；找不到时可使用项目 deployment/。"
+        fail PACKAGE_MISSING "请先从管理员提供的私人链接下载接入包，仅解开外层 ZIP，并将三份文件保存到 ~/Downloads/employee-workspace/；找不到时可使用项目 deployment/。"
     expected_sha="$(tr -d '\r\n' < "$bundle_dir/device-bundle.sha256")"
 fi
 [[ "$expected_sha" =~ ^[a-f0-9]{64}$ ]] || fail PACKAGE_HASH_INVALID "设备包摘要格式无效。"
@@ -145,19 +145,30 @@ wg_keepalive=25
 vnet_pattern='^ws-[a-f0-9]{8}$'
 vm_pattern='^employee-[a-z0-9-]{1,40}$'
 extra_fields=""
+access_mode=desktop
+mosh_ports=""
 if [[ "$schema" == 2 && "$tool_version" == 2.0.0 ]]; then
     profile="$(json_get profile)" || fail MANIFEST_INVALID "Missing profile."
     ssh_user="$(json_get ssh_user)" || fail MANIFEST_INVALID "Missing native SSH user."
     ssh_alias="$(json_get ssh_alias)" || fail MANIFEST_INVALID "Missing profile alias."
-    desktop_url="$(json_get desktop_url)" || fail MANIFEST_INVALID "Missing target desktop URL."
-    tls_pin="$(json_get tls_certificate_sha256)" || fail MANIFEST_INVALID "Missing target TLS pin."
-    [[ "$profile" == oci-hub && "$ssh_user" == employee && "$ssh_alias" == "oci-hub-$device" &&
-       "$desktop_url" == "https://$gateway:8443/" && "$tls_pin" =~ ^[a-f0-9]{64}$ ]] || fail MANIFEST_INVALID "Invalid native SSH profile."
+    [[ "$profile" == oci-hub && "$ssh_user" == employee && "$ssh_alias" == "oci-hub-$device" ]] || fail MANIFEST_INVALID "Invalid native SSH profile."
+    access_mode="$(json_get access_mode || printf desktop)"
+    if [[ "$access_mode" == mosh ]]; then
+        mosh_ports="$(json_get mosh_ports)" || fail MANIFEST_INVALID "Missing device Mosh ports."
+        [[ "$mosh_ports" =~ ^(6[01][0-9]{3}):(6[01][0-9]{3})$ ]] || fail MANIFEST_INVALID "Invalid Mosh ports."
+        [[ "${mosh_ports%:*}" -le "${mosh_ports#*:}" && "${mosh_ports#*:}" -le 61000 ]] || fail MANIFEST_INVALID "Invalid Mosh range."
+        vm_pattern='^(employee|oci-hub)-[a-z0-9-]{1,40}$'
+        extra_fields="$(printf '%s\n' profile ssh_user ssh_alias access_mode mosh_ports)"
+    elif [[ "$access_mode" == desktop ]]; then
+        desktop_url="$(json_get desktop_url)" || fail MANIFEST_INVALID "Missing target desktop URL."
+        tls_pin="$(json_get tls_certificate_sha256)" || fail MANIFEST_INVALID "Missing target TLS pin."
+        [[ "$desktop_url" == "https://$gateway:8443/" && "$tls_pin" =~ ^[a-f0-9]{64}$ ]] || fail MANIFEST_INVALID "Invalid desktop identity."
+        vm_pattern='^oci-hub-[a-z0-9-]{1,40}$'
+        extra_fields="$(printf '%s\n' profile ssh_user ssh_alias desktop_url tls_certificate_sha256)"
+    else fail MANIFEST_INVALID "Unsupported access mode."; fi
     wg_port=51824
     wg_keepalive=15
     vnet_pattern='^wh-[a-f0-9]{8}$'
-    vm_pattern='^oci-hub-[a-z0-9-]{1,40}$'
-    extra_fields="$(printf '%s\n' profile ssh_user ssh_alias desktop_url tls_certificate_sha256)"
 elif [[ "$schema" != 1 || "$tool_version" != 1.0.0 ]]; then
     fail PACKAGE_VERSION_UNSUPPORTED "Unsupported bundle version."
 fi
@@ -419,6 +430,19 @@ case "$action" in
             check_new_tunnel_route
         fi
         report DISCONNECTED ;;
+    mosh)
+        require_installed
+        [[ "$profile" == oci-hub && "$access_mode" == mosh ]] || fail MOSH_NOT_CONFIGURED "This bundle has no native Mosh assignment."
+        command -v mosh >/dev/null && command -v mosh-client >/dev/null || fail MOSH_CLIENT_MISSING "Install Mosh in this terminal environment with user approval; see docs/mosh.md."
+        # Mosh is interactive: never run it through a pipe or record its handshake key.
+        [[ -t 0 && -t 1 ]] || fail INTERACTIVE_TERMINAL_REQUIRED "Run this same mosh command in the user's interactive terminal."
+        config="$state/ssh_config"
+        cleanup
+        stage=""
+        # --ssh is parsed as a command by Mosh; quote the path as shell data.
+        quoted_config="$(jq -nr --arg path "$config" '$path|@sh')"
+        exec mosh --ssh="ssh -F $quoted_config" --server=workspace-mosh --port="$mosh_ports" "$ssh_alias"
+        ;;
     connect|sftp)
         require_installed
         cleanup
@@ -434,7 +458,7 @@ case "$action" in
         prefix="WS_${nonce}"
         # One complete command fits the PTY line discipline. No queued commands
         # remain for a CLI or shell hook to consume. No gateway command is appended.
-        if [[ "$profile" == oci-hub ]]; then
+        if [[ "$profile" == oci-hub && "$access_mode" == desktop ]]; then
             command -v openssl >/dev/null || fail DEPENDENCY_MISSING "TLS pin verification requires openssl."
             run_bounded 15 openssl s_client -connect "$gateway:8443" -servername "$gateway" < /dev/null > "$stage/tls-peer" 2>/dev/null || fail TLS_PIN_FAILED "Target TLS handshake failed."
             openssl x509 -in "$stage/tls-peer" -outform DER -out "$stage/tls.der" 2>/dev/null || fail TLS_PIN_FAILED "Target TLS certificate invalid."
