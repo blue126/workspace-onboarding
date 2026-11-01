@@ -8,14 +8,14 @@
 
 > 请按 https://github.com/blue126/workspace-onboarding 的指引，从“网盘链接”下载本设备接入包并完成 bootstrap；需要登录或系统授权时交给我。
 
-注：把“网盘链接”换成你邮件中收到的 Temp.sh 下载链接即可。请使用具备本机文件和终端操作能力的 Agent；个人登录、验证码和系统授权由本人操作。
+注：把“网盘链接”换成你邮件中收到的 cc.willfan.me 下载链接即可；下载时 Agent 会请你提供发到邮箱的 6 位验证码。请使用具备本机文件和终端操作能力的 Agent；个人登录、验证码和系统授权由本人操作。
 
 重跑时获取远端 main 的最新代码；已有干净仓库用 `git pull --ff-only` 更新，保留任何本地修改。同一设备的普通重跑继续使用原接入包；管理员明确发送迁移／更新包时，改用此次新链接和 SHA256 对应的新包，不能继续选用缓存旧包。不自行生成身份；设备换机时再申请独立接入包。
 
 ## Agent 执行顺序
 
 1. 阅读本项目 README.md、AGENTS.md，获取公开源码到下表指定的源码目录；已有同名目录时先核对来源，不覆盖本地工作。
-2. 按 [设备包下载](docs/download.md)，对员工提供的 Temp.sh 链接发送 HTTP POST 下载外层 ZIP；无需网盘账号或浏览器，不能用普通 GET 页面代替下载。失败停止，请管理员核对链接，不反复重试。
+2. 按 [设备包下载](docs/download.md)，对员工提供的 cc.willfan.me 链接先请求验证码、再带员工提供的验证码以 HTTP POST 下载外层 ZIP；无需网盘账号或浏览器，不能用普通 GET 页面代替下载。失败停止，请管理员核对链接，不反复重试。
 3. 校验管理员通知中的外层 SHA256，确认外层恰好是三个顶层普通文件；创建下方默认接收目录。只保存本次交付，不覆盖已有不同身份。
 4. 仅解开外层 ZIP，把 `device-bundle.zip`、`device-bundle.sha256`、`README.md` 放入默认接收目录；保留内层 `device-bundle.zip`，不要自行展开密钥。
 5. 按 [标准验证](docs/verification.md) 运行 check → setup → verify；连接通过后先 connect 进入 VM；终端试点按 Mosh 小节继续并可跳过 Claude。需要个人授权时才用 workspace-login 交本人完成登录。
