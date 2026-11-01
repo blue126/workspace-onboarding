@@ -1,10 +1,10 @@
 # 员工本机 Agent 约定
 
-员工提供公开项目地址和本人收到的 Temp.sh 下载链接，无需 GitHub 账号。
+员工提供公开项目地址和本人收到的 cc.willfan.me 下载链接，无需 GitHub 账号。
 
 1. 重跑时先读取远端 main 的最新 README/AGENTS；已有来源正确且工作树干净的仓库用 `git pull --ff-only` 更新，不使用缓存旧版，有本地修改则保留并确认处理。获取公开源码到 macOS/Linux `~/EmployeeWorkspace/onboarding/` 或 Windows `%USERPROFILE%\EmployeeWorkspace\onboarding\`，并读取 README/AGENTS；已有目录先核对仓库来源，不覆盖本地文件或重置工作树。
 2. 默认接收目录为 macOS/Linux 的 `~/Downloads/employee-workspace/`、Windows 的 `%USERPROFILE%\Downloads\employee-workspace\`。该目录独立于源码；需要时创建。
-3. 仅按 [设备包下载](docs/download.md) 从员工提供的 Temp.sh 链接用 HTTP POST 下载外层 ZIP，无需网盘账号或浏览器。GET 可能返回 HTML，不把网页当 ZIP。按管理员通知核对外层 SHA256；失败或过期停止并联系管理员，不反复重试，不索取账号、Cookie 或令牌。
+3. 仅按 [设备包下载](docs/download.md) 从员工提供的 cc.willfan.me 链接下载外层 ZIP：先 POST `<链接>/code` 让网站把验证码发到员工邮箱，向员工索取 6 位验证码，再带 `code` POST 下载；无需网盘账号或浏览器。GET 可能返回 HTML，不把网页当 ZIP。按管理员通知核对外层 SHA256；失败或过期停止并联系管理员，不反复重试，不索取账号、Cookie 或令牌。
 4. 外层必须恰好包含 device-bundle.zip、device-bundle.sha256、README.md 三个顶层普通文件，拒绝路径穿越、重复项和链接；只解开外层到默认接收目录，保留内层 device-bundle.zip。仅处理本次文件，不覆盖已有不同身份或扫描其他私密文件。
 5. 首选目录不存在设备文件时，源码项目的 deployment/ 可作为后备：告诉员工准确位置并等文件就绪。首选目录部分缺失或校验失败时停止对应操作，不静默换用后备身份。
 6. 三份文件齐全后，从源码目录运行仓库原生入口 check、setup、verify、connect。setup 默认把配置和密钥放在 macOS/Linux `~/EmployeeWorkspace/devices/<device_id>/` 或 Windows `%USERPROFILE%\EmployeeWorkspace\devices\<device_id>\`；不选 Library、AppData 或其他隐藏目录。已有旧配置不得自动搬迁、删除或重新导入，应先让用户选择继续使用旧路径或迁移。设备包由脚本按数据校验处理；Agent 不展开、打印或上传密钥，不执行包内文件。
