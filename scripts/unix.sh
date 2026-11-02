@@ -336,17 +336,17 @@ include_line="Include \"$state/ssh_config\""
 check_ssh_include_target() {
     local links
     if [[ -e "$user_ssh_dir" || -L "$user_ssh_dir" ]]; then
-        [[ -d "$user_ssh_dir" && -w "$user_ssh_dir" ]] || fail SSH_CONFIG_UNSAFE "~/.ssh is not a writable directory; ~/.ssh left unchanged."
+        [[ -d "$user_ssh_dir" && -w "$user_ssh_dir" ]] || fail SSH_CONFIG_UNSAFE "$HOME/.ssh is not a writable directory; $HOME/.ssh left unchanged."
     else
-        [[ -d "$HOME" && -w "$HOME" ]] || fail SSH_CONFIG_UNSAFE "Cannot create ~/.ssh; ~/.ssh left unchanged."
+        [[ -d "$HOME" && -w "$HOME" ]] || fail SSH_CONFIG_UNSAFE "Cannot create ~/.ssh; $HOME/.ssh left unchanged."
     fi
     if [[ -e "$user_ssh_config" || -L "$user_ssh_config" ]]; then
         [[ -f "$user_ssh_config" && ! -L "$user_ssh_config" && -r "$user_ssh_config" && -w "$user_ssh_config" ]] ||
-            fail SSH_CONFIG_UNSAFE "~/.ssh/config is a link, special file or not writable; ~/.ssh left unchanged."
+            fail SSH_CONFIG_UNSAFE "$HOME/.ssh/config is a link, special file or not writable; $HOME/.ssh left unchanged."
         # Atomic replacement would split a hard-linked file from its other names.
         if [[ "$platform" == macos ]]; then links="$(stat -f %l "$user_ssh_config")" || links=""
         else links="$(stat -c %h "$user_ssh_config")" || links=""; fi
-        [[ "$links" == 1 ]] || fail SSH_CONFIG_UNSAFE "~/.ssh/config has several hard links; ~/.ssh left unchanged."
+        [[ "$links" == 1 ]] || fail SSH_CONFIG_UNSAFE "$HOME/.ssh/config has several hard links; $HOME/.ssh left unchanged."
     fi
 }
 # Put the device Include on line 1 so it applies before any user Host/Match block.
