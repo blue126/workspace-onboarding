@@ -30,3 +30,5 @@ macOS 系统自带 Bash 3.2，不能用于运行 `wg-quick`。bootstrap 会单�
 ## Mosh 终端试用
 
 已获管理员开通的设备按 [Mosh 客户端安装、连接与验证](mosh.md) 操作。Agent 负责安装和配置，系统授权由本人确认；端口取自当前设备的管理员通知。终端试用无需登录 Claude。
+
+OCI Hub 设备在 1.1.0 setup 后可直接运行 `ssh <员工ID>-vm` 或 `mosh <员工ID>-vm`；`bash ./bootstrap.sh mosh` 保留为备选。见 [一条命令登录](mosh.md#一条命令登录员工id-vm)。

@@ -12,3 +12,5 @@
 ## Mosh 终端试用
 
 已获管理员开通的设备按 [Mosh 客户端安装、连接与验证](mosh.md) 操作。Agent 负责安装和配置，系统授权由本人确认；端口取自当前设备的管理员通知。终端试用无需登录 Claude。
+
+Windows 原生 setup 不添加 `<员工ID>-vm` 别名。需要一条命令登录时，在 WSL 中按 [Mosh 指引的 WSL 步骤](mosh.md#oci-hub-终端模式) 为本设备配置加别名与 Include，再在 WSL 运行 `ssh <员工ID>-vm` 或 `mosh <员工ID>-vm`。

@@ -53,8 +53,12 @@ class Bootstrap(unittest.TestCase):
             "wg.key": base64.b64encode(b"c"*32) + b"\n",
             "known_hosts": ("10.77.0.1 " + " ".join(self.public) + "\n").encode(),
         }
+        # A private HOME keeps setup away from the real ~/.ssh/config.
+        self.home = self.path / "home"
+        self.home.mkdir()
         self.env = dict(os.environ, PATH=str(self.bin)+os.pathsep+os.environ["PATH"],
-                        FIXTURE=str(self.path), FIXTURE_PYTHON=sys.executable)
+                        FIXTURE=str(self.path), FIXTURE_PYTHON=sys.executable,
+                        HOME=str(self.home), USERPROFILE=str(self.home))
         self.bundle()
         if not WINDOWS:
             self.stubs()
@@ -613,6 +617,169 @@ elif name=="ip":
         jsonschema.validate(self.manifest,schema)
         example=json.loads((ROOT/'examples/bundle-manifest.oci-hub-mosh.example.json').read_text())
         jsonschema.validate(example,schema)
+
+    def native_state(self):
+        return self.state/'oci-hub'/self.manifest['device_id']
+
+    def user_config(self):
+        return self.home/'.ssh'/'config'
+
+    def include_line(self):
+        return 'Include "'+str((self.native_state()/'ssh_config').resolve())+'"'
+
+    def resolve_host(self, host):
+        # The real client, not the PATH stub; -F keeps system and account config out.
+        ssh=shutil.which('ssh',path=os.environ['PATH'])
+        run=subprocess.run([ssh,'-G','-F',str(self.user_config()),host],capture_output=True,text=True,timeout=20)
+        self.assertEqual(run.returncode,0,run.stderr)
+        values={}
+        for line in run.stdout.splitlines():
+            key,_,value=line.partition(' ')
+            values.setdefault(key,value)
+        return values
+
+    @unittest.skipIf(WINDOWS,'Unix ssh_config Include')
+    def test_alias_fresh_install_creates_private_include_that_resolves(self):
+        self.hub_manifest();self.setup()
+        config=(self.native_state()/'ssh_config').read_text()
+        self.assertEqual(config.splitlines()[0],'Host oci-hub-'+self.manifest['device_id']+' fixture-vm')
+        self.assertEqual(stat.S_IMODE((self.home/'.ssh').stat().st_mode),0o700)
+        self.assertEqual(stat.S_IMODE(self.user_config().stat().st_mode),0o600)
+        self.assertEqual(self.user_config().read_text(),self.include_line()+'\n')
+        resolved=self.resolve_host('fixture-vm')
+        state=self.native_state().resolve()
+        self.assertEqual(resolved['hostname'],'10.77.0.1')
+        self.assertEqual(resolved['user'],'employee')
+        self.assertEqual(resolved['identityfile'],str(state/'client-key'))
+        self.assertEqual(resolved['userknownhostsfile'],str(state/'known_hosts'))
+
+    @unittest.skipIf(WINDOWS,'Unix ssh_config Include')
+    def test_alias_upgrades_1_0_0_ssh_config_only_on_setup(self):
+        self.hub_manifest();self.setup()
+        installed=self.native_state()/'ssh_config'
+        current=installed.read_text()
+        legacy='Host oci-hub-'+self.manifest['device_id']+'\n'+current.split('\n',1)[1]
+        installed.write_text(legacy);self.user_config().unlink()
+        # Other commands keep using the 1.0.0 config: a full verify passes against it unchanged.
+        (self.path/'tunnel-active').touch()
+        self.call('check',code='CHECKED')
+        self.call('verify',code='CONNECTION_VERIFIED')
+        self.assertEqual(installed.read_text(),legacy)
+        self.assertFalse(self.user_config().exists())
+        self.setup()
+        self.assertEqual(installed.read_text(),current)
+        self.assertEqual(stat.S_IMODE(installed.stat().st_mode),0o600)
+        self.assertEqual(self.user_config().read_text(),self.include_line()+'\n')
+
+    @unittest.skipIf(WINDOWS,'Unix ssh_config Include')
+    def test_alias_rerun_changes_nothing(self):
+        self.hub_manifest();self.setup()
+        before={p.name:p.read_bytes() for p in self.native_state().iterdir()}
+        user=self.user_config().read_bytes()
+        self.setup()
+        self.assertEqual(before,{p.name:p.read_bytes() for p in self.native_state().iterdir()})
+        self.assertEqual(self.user_config().read_bytes(),user)
+
+    @unittest.skipIf(WINDOWS,'Unix ssh_config Include')
+    def test_alias_tampered_ssh_config_conflicts_and_writes_nothing(self):
+        self.hub_manifest();self.setup()
+        installed=self.native_state()/'ssh_config'
+        installed.write_text(installed.read_text().replace('ConnectTimeout 10','ConnectTimeout 99'))
+        tampered=installed.read_bytes();self.user_config().unlink()
+        self.call('setup','--no-activate',code='CONFIG_CONFLICT')
+        self.assertEqual(installed.read_bytes(),tampered)
+        self.assertFalse(self.user_config().exists())
+
+    @unittest.skipIf(WINDOWS,'Unix ssh_config Include')
+    def test_alias_include_precedes_existing_user_hosts_without_changing_them(self):
+        (self.home/'.ssh').mkdir(mode=0o700)
+        original='Host fixture-vm other\n    HostName 192.0.2.5\n    User bob\n\nHost *\n    ServerAliveInterval 30\n'
+        self.user_config().write_text(original);self.user_config().chmod(0o644)
+        before=self.resolve_host('other')
+        self.hub_manifest();self.setup()
+        self.assertEqual(self.user_config().read_text(),self.include_line()+'\n'+original)
+        self.assertEqual(stat.S_IMODE(self.user_config().stat().st_mode),0o644)
+        self.assertEqual(self.resolve_host('other'),before)
+        resolved=self.resolve_host('fixture-vm')
+        self.assertEqual((resolved['hostname'],resolved['user']),('10.77.0.1','employee'))
+
+    @unittest.skipIf(WINDOWS,'Unix symlink behavior')
+    def test_alias_symlinked_user_config_is_rejected_untouched(self):
+        (self.home/'.ssh').mkdir(mode=0o700)
+        target=self.path/'dotfiles-config';target.write_text('Host keep\n')
+        self.user_config().symlink_to(target)
+        self.hub_manifest()
+        self.call('setup','--no-activate',code='SSH_CONFIG_UNSAFE')
+        self.assertTrue(self.user_config().is_symlink())
+        self.assertEqual(target.read_text(),'Host keep\n')
+        self.assertEqual([p.name for p in (self.home/'.ssh').iterdir()],['config'])
+        # The device itself is still configured; only the Include is refused.
+        self.assertTrue((self.native_state()/'ssh_config').is_file())
+
+    def assert_ssh_unchanged(self, before):
+        self.assertEqual({p.name:p.read_bytes() for p in (self.home/'.ssh').iterdir()},before)
+
+    @unittest.skipIf(WINDOWS or os.geteuid()==0,'Unix permission behavior')
+    def test_alias_non_writable_ssh_dir_is_rejected_untouched(self):
+        ssh_dir=self.home/'.ssh';ssh_dir.mkdir(mode=0o700);ssh_dir.chmod(0o500)
+        try:
+            self.hub_manifest()
+            self.call('setup','--no-activate',code='SSH_CONFIG_UNSAFE')
+            self.assert_ssh_unchanged({})
+        finally:ssh_dir.chmod(0o700)
+
+    @unittest.skipIf(WINDOWS or os.geteuid()==0,'Unix permission behavior')
+    def test_alias_non_writable_user_config_is_rejected_untouched(self):
+        (self.home/'.ssh').mkdir(mode=0o700)
+        self.user_config().write_text('Host keep\n');self.user_config().chmod(0o400)
+        self.hub_manifest()
+        self.call('setup','--no-activate',code='SSH_CONFIG_UNSAFE')
+        self.assert_ssh_unchanged({'config':b'Host keep\n'})
+        self.assertEqual(stat.S_IMODE(self.user_config().stat().st_mode),0o400)
+
+    @unittest.skipIf(WINDOWS,'Unix hard link behavior')
+    def test_alias_hard_linked_user_config_is_rejected_untouched(self):
+        (self.home/'.ssh').mkdir(mode=0o700)
+        self.user_config().write_text('Host keep\n')
+        other=self.path/'dotfiles-config';os.link(self.user_config(),other)
+        self.hub_manifest()
+        self.call('setup','--no-activate',code='SSH_CONFIG_UNSAFE')
+        self.assert_ssh_unchanged({'config':b'Host keep\n'})
+        self.assertEqual(self.user_config().stat().st_nlink,2)
+
+    @unittest.skipIf(WINDOWS,'Unix ssh_config Include')
+    def test_alias_include_after_host_block_moves_to_line_one(self):
+        self.hub_manifest()
+        (self.home/'.ssh').mkdir(mode=0o700)
+        self.user_config().write_text('Host other\n    User bob\n'+self.include_line()+'\n')
+        self.setup()
+        self.assertEqual(self.user_config().read_text(),self.include_line()+'\nHost other\n    User bob\n')
+        self.setup()
+        self.assertEqual(self.user_config().read_text().count('Include'),1)
+
+    @unittest.skipIf(WINDOWS,'Unix ssh_config Include')
+    def test_alias_mosh_mode_with_oci_hub_hostname(self):
+        self.mosh_manifest();self.manifest['vm_hostname']='oci-hub-fixture'
+        self.data['manifest.json']=json.dumps(self.manifest).encode();self.bundle();self.stubs()
+        self.setup()
+        self.assertEqual((self.native_state()/'ssh_config').read_text().splitlines()[0],'Host oci-hub-'+self.manifest['device_id']+' fixture-vm')
+        self.assertEqual(self.user_config().read_text(),self.include_line()+'\n')
+        resolved=self.resolve_host('fixture-vm')
+        self.assertEqual((resolved['hostname'],resolved['user']),('10.77.0.1','employee'))
+
+    @unittest.skipIf(WINDOWS,'Unix ssh_config Include')
+    def test_alias_not_added_without_oci_hub_employee_hostname(self):
+        self.setup()
+        self.assertFalse((self.home/'.ssh').exists())
+        self.mosh_manifest();self.setup()
+        self.assertEqual((self.native_state()/'ssh_config').read_text().splitlines()[0],'Host oci-hub-'+self.manifest['device_id'])
+        self.assertFalse((self.home/'.ssh').exists())
+        for field in ('access_mode','mosh_ports'):self.manifest.pop(field)
+        self.hub_manifest();self.manifest['vm_hostname']='oci-hub-'+'a'*21
+        self.data['manifest.json']=json.dumps(self.manifest).encode();self.bundle()
+        self.state=self.path/'other state';self.setup()
+        self.assertNotIn('-vm',(self.native_state()/'ssh_config').read_text().splitlines()[0])
+        self.assertFalse((self.home/'.ssh').exists())
 
 if __name__=="__main__":
     unittest.main()

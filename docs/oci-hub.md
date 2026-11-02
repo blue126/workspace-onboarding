@@ -7,3 +7,5 @@
 原型测试不是实际 VPN、桌面、Windows 或中国网络验收；真实接入前完成服务端上线门槛。
 
 终端试点包以 `access_mode=mosh` 显式分派，携带 `mosh_ports` 并允许原 `employee-*` VM 主机名，省略桌面 URL/TLS 字段。verify 只核对该模式的 SSH/SFTP 与目标身份；Mosh 客户端安装、交互启动和人工体验按 [Mosh 指引](mosh.md) 执行。不要为完成终端验收而启动浏览器。
+
+1.1.0 起，VM 主机名为 `oci-hub-<员工ID>` 的设备在 setup 后可直接用 `ssh <员工ID>-vm`、`mosh <员工ID>-vm` 登录：setup 为本设备 `ssh_config` 增加该别名，并在 `~/.ssh/config` 第一行加入指向它的 Include；1.0.0 已安装的同一设备重跑 setup 即原地升级。细节与 Windows WSL 步骤见 [Mosh 指引](mosh.md#一条命令登录员工id-vm)。

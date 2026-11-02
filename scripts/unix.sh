@@ -182,6 +182,11 @@ fi
 [[ "$device" =~ ^[a-z][a-z0-9-]{0,27}$ && "$vm_hostname" =~ $vm_pattern &&
    "$tunnel" =~ $vnet_pattern && "$peer" =~ ^[A-Za-z0-9+/]{43}=$ &&
    "$client_public" =~ ^[A-Za-z0-9+/]{43}=$ ]] || fail MANIFEST_INVALID "设备或公钥格式无效。"
+# Login alias for the system ssh/mosh: <employee-id>-vm, derived from oci-hub-<employee-id>.
+vm_alias=""
+if [[ "$profile" == oci-hub && "$vm_hostname" =~ ^oci-hub-[a-z][a-z0-9-]{0,19}$ ]]; then
+    vm_alias="${vm_hostname#oci-hub-}-vm"
+fi
 valid_ip() {
     local value="$1" part
     local parts
@@ -276,8 +281,10 @@ Endpoint = $endpoint:$wg_port
 AllowedIPs = $gateway/32
 PersistentKeepalive = $wg_keepalive
 EOF
-    cat > "$stage/ssh_config" <<EOF
-Host $ssh_alias
+    {
+        if [[ -n "$vm_alias" ]]; then printf 'Host %s %s\n' "$ssh_alias" "$vm_alias"
+        else printf 'Host %s\n' "$ssh_alias"; fi
+        cat <<EOF
     HostName $gateway
     User $ssh_user
     Port 22
@@ -302,16 +309,67 @@ Host $ssh_alias
     ServerAliveInterval 15
     ServerAliveCountMax 3
 EOF
+    } > "$stage/ssh_config"
+    # Release 1.0.0 output, used only to recognize an installation to upgrade.
+    { printf 'Host %s\n' "$ssh_alias"; tail -n +2 "$stage/ssh_config"; } > "$stage/ssh_config.v1"
     printf '%s\n' "$expected_sha" > "$stage/bundle.sha256"
     chmod 600 "$stage/"*
 }
 write_configs
+ssh_config_legacy=false
 require_installed() {
     [[ -d "$state" && ! -L "$state" ]] || fail NOT_CONFIGURED "Run setup first."
     for file in client-key known_hosts manifest.json wg.key ssh_config "$tunnel.conf" bundle.sha256; do
-        [[ -f "$state/$file" && ! -L "$state/$file" ]] &&
-            cmp -s "$stage/$file" "$state/$file" || fail CONFIG_CONFLICT "Installed configuration differs; nothing overwritten."
+        [[ -f "$state/$file" && ! -L "$state/$file" ]] || fail CONFIG_CONFLICT "Installed configuration differs; nothing overwritten."
+        cmp -s "$stage/$file" "$state/$file" && continue
+        # The 1.0.0 ssh_config stays usable; only setup upgrades it.
+        if [[ "$file" == ssh_config ]] && cmp -s "$stage/ssh_config.v1" "$state/ssh_config"; then
+            ssh_config_legacy=true
+            continue
+        fi
+        fail CONFIG_CONFLICT "Installed configuration differs; nothing overwritten."
     done
+}
+user_ssh_dir="$HOME/.ssh"
+user_ssh_config="$user_ssh_dir/config"
+include_line="Include \"$state/ssh_config\""
+check_ssh_include_target() {
+    local links
+    if [[ -e "$user_ssh_dir" || -L "$user_ssh_dir" ]]; then
+        [[ -d "$user_ssh_dir" && -w "$user_ssh_dir" ]] || fail SSH_CONFIG_UNSAFE "~/.ssh is not a writable directory; ~/.ssh left unchanged."
+    else
+        [[ -d "$HOME" && -w "$HOME" ]] || fail SSH_CONFIG_UNSAFE "Cannot create ~/.ssh; ~/.ssh left unchanged."
+    fi
+    if [[ -e "$user_ssh_config" || -L "$user_ssh_config" ]]; then
+        [[ -f "$user_ssh_config" && ! -L "$user_ssh_config" && -r "$user_ssh_config" && -w "$user_ssh_config" ]] ||
+            fail SSH_CONFIG_UNSAFE "~/.ssh/config is a link, special file or not writable; ~/.ssh left unchanged."
+        # Atomic replacement would split a hard-linked file from its other names.
+        if [[ "$platform" == macos ]]; then links="$(stat -f %l "$user_ssh_config")" || links=""
+        else links="$(stat -c %h "$user_ssh_config")" || links=""; fi
+        [[ "$links" == 1 ]] || fail SSH_CONFIG_UNSAFE "~/.ssh/config has several hard links; ~/.ssh left unchanged."
+    fi
+}
+# Put the device Include on line 1 so it applies before any user Host/Match block.
+install_ssh_include() {
+    local tmp mode
+    if [[ ! -d "$user_ssh_dir" ]]; then mkdir -m 700 "$user_ssh_dir" || return 1; fi
+    if [[ -e "$user_ssh_config" ]]; then
+        [[ "$(head -n 1 "$user_ssh_config")" != "$include_line" ]] || return 0
+        if [[ "$platform" == macos ]]; then mode="$(stat -f %Lp "$user_ssh_config")" || return 1
+        else mode="$(stat -c %a "$user_ssh_config")" || return 1; fi
+    else mode=600; fi
+    tmp="$(mktemp "$user_ssh_dir/.config.XXXXXXXX")" || return 1
+    # Later copies of the same line move to line 1; every other line is kept as is.
+    if { printf '%s\n' "$include_line"
+         [[ ! -e "$user_ssh_config" ]] || INCLUDE_LINE="$include_line" awk '$0 != ENVIRON["INCLUDE_LINE"]' "$user_ssh_config"; } > "$tmp" &&
+        chmod "$mode" "$tmp" && mv -f "$tmp" "$user_ssh_config"; then return 0; fi
+    rm -f "$tmp"
+    return 1
+}
+setup_ssh_include() {
+    [[ -n "$vm_alias" ]] || return 0
+    check_ssh_include_target
+    install_ssh_include || fail SSH_CONFIG_WRITE_FAILED "Could not add the Include line to ~/.ssh/config."
 }
 run_bounded() {
     local seconds="$1" command_pid watcher status
@@ -388,7 +446,14 @@ case "$action" in
         if [[ -d "$state_root" && ! -f "$state_root/.workspace-onboarding" ]]; then
             [[ -z "$(ls -A "$state_root")" ]] || fail STATE_ROOT_CONFLICT "Existing directory is not managed by this project."
         fi
-        if [[ -e "$state" ]]; then require_installed
+        if [[ -e "$state" ]]; then
+            require_installed
+            if $ssh_config_legacy; then
+                upgrade=""
+                { upgrade="$(mktemp "$state/.ssh_config.XXXXXXXX")" && cp "$stage/ssh_config" "$upgrade" &&
+                    chmod 600 "$upgrade" && mv -f "$upgrade" "$state/ssh_config"; } ||
+                    { [[ -z "$upgrade" ]] || rm -f "$upgrade"; fail CONFIG_UPGRADE_FAILED "Could not upgrade ssh_config; previous file kept."; }
+            fi
         else
             mkdir -p "$state_root"
             [[ ! -L "$state_root" ]] || fail STATE_PATH_UNSAFE "Symlink state directory rejected."
@@ -400,7 +465,8 @@ case "$action" in
                 chmod 600 "$state/$file"
             done
         fi
-        if $no_activate; then report CONFIGURED; exit 0; fi
+        # The Include is the last step: an unsafe ~/.ssh/config never blocks the tunnel.
+        if $no_activate; then setup_ssh_include; report CONFIGURED; exit 0; fi
         $client_ready || fail DEPENDENCY_MISSING "请运行 setup --install-clients 安装 WireGuard CLI。"
         require_tunnel_admin
         if resolve_tunnel_interface; then
@@ -417,6 +483,7 @@ case "$action" in
             fi
             owned_tunnel || fail TUNNEL_CONFLICT "Started tunnel does not match the assigned identity."
         fi
+        setup_ssh_include
         report CONFIGURED ;;
     disconnect)
         require_installed

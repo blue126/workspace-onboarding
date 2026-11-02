@@ -74,7 +74,7 @@ VPN 使用 CLI：macOS 为 Homebrew wireguard-tools，Linux 为 wg-quick，Windo
 
 收到管理员的 Mosh 试用参数后，让本机 Agent 按 [Mosh 安装、连接与验证](docs/mosh.md) 完成设置。先识别当前设备账号，复用现有接入配置；按实际系统安装客户端，再使用该设备分配的端口连接。终端试用以打字响应和断线恢复为主，Claude 登录可跳过。复制给 Agent 的提示词必须包含实际下载链接（需要补包时）、Mosh 服务端命令和该设备端口，不能只写“参考邮件”。
 
-OCI Hub 终端试点包会提供 `access_mode=mosh` 与端口分配；按 [Mosh 的 OCI Hub 小节](docs/mosh.md#oci-hub-终端模式) 操作。macOS/Linux 可运行 `bash ./bootstrap.sh mosh`，Windows 在 WSL 使用同一设备的新方案 SSH 配置。此试点无需先打开桌面或登录 Claude。
+OCI Hub 终端试点包会提供 `access_mode=mosh` 与端口分配；按 [Mosh 的 OCI Hub 小节](docs/mosh.md#oci-hub-终端模式) 操作。1.1.0 起，VM 主机名为 `oci-hub-<员工ID>` 时，macOS/Linux 的 setup 会在 `~/.ssh/config` 第一行加入本设备配置的 Include，之后直接运行 `ssh <员工ID>-vm` 或 `mosh <员工ID>-vm`；`bash ./bootstrap.sh mosh` 保留为备选。1.0.0 已安装的设备重跑 setup 即原地升级。Windows 在 WSL 使用同一设备的新方案 SSH 配置，步骤见 Mosh 指引。此试点无需先打开桌面或登录 Claude。
 
 ## VM 内的 Claude 与浏览器
 
