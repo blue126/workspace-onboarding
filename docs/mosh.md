@@ -16,6 +16,17 @@ bash ./bootstrap.sh connect
 bash ./bootstrap.sh mosh
 ```
 
+### 一条命令登录：`<员工ID>-vm`
+
+1.1.0 起，包内 VM 主机名为 `oci-hub-<员工ID>` 时，setup 会为本设备 SSH 配置增加 `<员工ID>-vm` 别名，并在 `~/.ssh/config` 第一行加入 `Include "<本设备 ssh_config 绝对路径>"`，使系统自带的 `ssh`/`mosh` 直接读取本设备配置（主机校验仍然严格）。`~/.ssh` 不存在时以 700 创建，`~/.ssh/config` 不存在时以 600 创建；已有相同 Include 行时只保留一行并移到第一行，其他内容不改动。Include 在 setup 最后一步写入；`~/.ssh` 不可写，或 `~/.ssh/config` 为符号链接、硬链接或不可写时返回 `SSH_CONFIG_UNSAFE`，`~/.ssh` 不被改动（隧道与本设备配置已完成），请本人决定如何处理。之后在本人交互终端直接运行：
+
+```bash
+ssh <员工ID>-vm
+mosh <员工ID>-vm
+```
+
+已用 1.0.0 完成 setup 的设备，更新源码后对同一设备包重跑 setup 即原地升级本设备 `ssh_config` 并加入 Include，无需新设备包。上面的 `bootstrap.sh connect`、`bootstrap.sh mosh` 继续可用，作为备选。
+
 脚本从本设备包读取端口、alias 和 SSH 配置，保持严格主机校验。出现 `MOSH_CLIENT_MISSING` 时按下表取得安装授权并安装客户端；出现 `INTERACTIVE_TERMINAL_REQUIRED` 时，由 Agent 打开本人的交互终端运行同一命令，不通过管道驱动 Mosh 或记录握手输出。没有本次原生 Mosh 分配会返回 `MOSH_NOT_CONFIGURED`。
 
 Windows 用原生 PowerShell 完成 check/setup/verify/connect；`bootstrap.ps1 mosh` 返回 `MOSH_WSL_REQUIRED`。按下面 WSL 约定只适配这一设备的新方案 SSH 配置、key、known_hosts 到本人 Linux 目录，保留 host pin 和 `oci-hub-<device_id>` alias；在 WSL 运行：
@@ -23,6 +34,8 @@ Windows 用原生 PowerShell 完成 check/setup/verify/connect；`bootstrap.ps1 
 ```bash
 mosh --ssh='ssh -F "<WSL内本设备ssh_config绝对路径>"' --server=workspace-mosh --port='<包内mosh_ports>' 'oci-hub-<包内device_id>'
 ```
+
+如需在 WSL 中也用一条命令登录：适配后的 `ssh_config` 第一行写为 `Host oci-hub-<包内device_id> <员工ID>-vm`（`<员工ID>` 取包内 `vm_hostname` 去掉 `oci-hub-` 前缀；不是该格式时不加别名）；WSL 内 `~/.ssh` 不存在时以 700 创建，`~/.ssh/config` 不存在时以 600 创建，并在其第一行加入 `Include "<WSL内本设备ssh_config绝对路径>"`（已有相同行不重复，不改动原有内容；该文件为符号链接时停止并询问本人）。之后在 WSL 运行 `ssh <员工ID>-vm` 或 `mosh <员工ID>-vm`。
 
 Agent 将模板替换为实际值后再交给本人。WSL 共用 Windows VPN，不执行 Linux WireGuard setup。接下来仍按本页固定验收表核对本人 VM、输入与重连；服务端版本命令改为新 alias 下的 `workspace-mosh --version`。本次可以跳过 Claude 登录；需要时先 SSH 进入 VM 再运行 `workspace-login`，不主动打开桌面或本机 Claude 授权页面。此终端包没有新增桌面通道；需要图形认证时沿用已验证的原桌面入口，缺少可用入口则交管理员处理，不猜测 URL 或修改证书。
 

@@ -11,6 +11,9 @@
 | HOMEBREW_REQUIRED | Agent 按 macOS 指引安装 Homebrew 后重跑 setup --install-clients，系统授权交还本人 |
 | ROUTE_INSPECTION_FAILED / TUNNEL_INSPECTION_FAILED | 无法检查当前路由或 CLI 接口，未修改网络；报告此代码，不盲目启停 |
 | STATE_ROOT_CONFLICT / CONFIG_CONFLICT | 现有目录／配置归属或内容不匹配；保留原文件，联系管理员，不覆盖 |
+| CONFIG_UPGRADE_FAILED | 无法把 1.0.0 的本设备 ssh_config 原地升级（多为状态目录不可写或磁盘已满）；原文件保留，旧命令照常可用。核对状态目录归属和权限后重跑 setup，不手工改写 ssh_config |
+| SSH_CONFIG_UNSAFE | `~/.ssh` 不是可写目录，或 `~/.ssh/config` 是符号链接、硬链接、特殊文件或不可写；隧道与本设备配置已完成，`~/.ssh` 未被改动。由本人决定是否改为普通可写文件后重跑 setup，或继续用 `bootstrap.sh connect`/`mosh`；Agent 不替本人改动该文件 |
+| SSH_CONFIG_WRITE_FAILED | 检查通过但写入 `~/.ssh/config` 失败（如磁盘已满）；原文件保留。排除原因后重跑 setup，期间用 `bootstrap.sh connect`/`mosh` |
 | TUNNEL_CONFLICT / ROUTE_CONFLICT | 已有隧道或路由冲突；核对是否本设备旧手工隧道，由本人处理迁移，不停止其他 VPN |
 | NO_RECENT_HANDSHAKE | 激活隧道并触发连接，检查 Endpoint／网络；在获准网络上重试 |
 | SSH_HOST_KEY_MISMATCH | 主机身份改变；暂停并联系管理员核对，不删除 known_hosts、不关闭严格校验 |

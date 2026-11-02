@@ -21,4 +21,4 @@ verify 后按 [必含信息](docs/after-verify.md) 交接：先给 SSH connect �
 
 OCI Hub v2 设备包显式声明 `profile=oci-hub`，使用独立 `devices/oci-hub/<device_id>` 状态、`wh-` 隧道和 `oci-hub-<device_id>` SSH alias。目标为本人 VM 的 `employee` native SSH；员工 WireGuard 使用 51824/15 秒。严格核对目标 SSH host pin；桌面模式另核对 HTTPS 证书 SHA256；v1 原入口继续可用。未知版本、profile 或字段均拒绝。细节见 [OCI Hub 接入](docs/oci-hub.md)。
 
-OCI Hub 终端试点包另有 `access_mode=mosh`、`mosh_ports`，保留原 VM 主机名，不包含桌面字段。按 docs/mosh.md 的 OCI Hub 小节执行，macOS/Linux 用 `bootstrap.sh mosh`，Windows 用 WSL Mosh；不对终端包要求 TLS/noVNC 验证。verify 仍先给 SSH 入口；Mosh/个人体验另行验收。旧网关 `employee-mosh` 与新 VM `workspace-mosh` 不混用。
+OCI Hub 终端试点包另有 `access_mode=mosh`、`mosh_ports`，保留原 VM 主机名，不包含桌面字段。按 docs/mosh.md 的 OCI Hub 小节执行，macOS/Linux 在包内 VM 主机名为 `oci-hub-<员工ID>` 时于 1.1.0 setup 后用 `mosh <员工ID>-vm`（`bootstrap.sh mosh` 为备选），否则用 `bootstrap.sh mosh`，Windows 用 WSL Mosh；setup 只在 `~/.ssh/config` 第一行加入本设备 Include，不改动用户其他内容，报 `SSH_CONFIG_UNSAFE` 时停止并询问本人；不对终端包要求 TLS/noVNC 验证。verify 仍先给 SSH 入口；Mosh/个人体验另行验收。旧网关 `employee-mosh` 与新 VM `workspace-mosh` 不混用。
