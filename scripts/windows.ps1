@@ -121,15 +121,13 @@ function Setup-SshInclude() {
         # Later copies of the same line move to line 1; every other line is kept as is.
         $content=(@($line)+@($lines | Where-Object { $_ -cne $line })) -join "`n"
         if(Test-Path -LiteralPath $userConfig) {
-            $temp=Join-Path $sshDir ('.config.'+[Guid]::NewGuid().ToString('N'))
-            Write-Utf8 $temp ($content+"`n")
-            # File.Replace keeps the existing file's ACL.
-            [IO.File]::Replace($temp,$userConfig,$null)
+            # Overwrite in place: the existing file keeps its ACL (File.Replace fails on some profiles).
+            Write-Utf8 $userConfig ($content+"`n")
         } else {
             Write-Utf8 $userConfig ($content+"`n")
             Private-Acl $userConfig
         }
-    } catch { Stop-Setup 'SSH_CONFIG_WRITE_FAILED' 'Could not add the Include line to %USERPROFILE%\.ssh\config.' }
+    } catch { Stop-Setup 'SSH_CONFIG_WRITE_FAILED' ('Could not add the Include line to %USERPROFILE%\.ssh\config: '+$_.Exception.Message) }
 }
 function Require-OwnedService($Service) {
     $cim=Get-CimInstance Win32_Service -Filter ("Name='"+$serviceName+"'")
