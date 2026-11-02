@@ -1,114 +1,121 @@
-# Mosh 终端试用：员工本机 Agent 指引
+# Mosh 登录
 
-本次目标是体验打字、退格、Ctrl-C 和短暂断网后的恢复。**无需登录 Claude 即可完成终端试用。** Mosh 用于交互终端，文件传输继续使用仓库的 SFTP 入口。
+Mosh 用于交互终端，打字响应更快，短暂断网后会话可以恢复；文件传输继续使用仓库的 SFTP 入口。本机需要保持 WireGuard 开启。
 
-## OCI Hub 终端模式
+## macOS / Linux：`<员工ID>-vm`
 
-若经过校验的 v2 包声明 `profile=oci-hub`、`access_mode=mosh`，使用本节。设备与 VM 各自连接 OCI；本机仍需保持 WireGuard 开启。连接分配的独立工作区 VM，新方案状态在 `~/EmployeeWorkspace/devices/oci-hub/<device_id>/`；保留旧包和旧状态用于回退。
+`bash ./bootstrap.sh setup --install-clients` 会安装缺少的 Mosh 客户端（macOS 用 Homebrew，Ubuntu/Debian 用 apt）。
 
-包内 `mosh_ports` 就是本设备分配，启动器为 VM 内 `workspace-mosh`。不套用下面旧网关的 `employee-mosh` 或 `workspace` alias。此模式无新增桌面 URL/TLS pin，verify 校验原生 SSH/SFTP 和目标 VM；verify 通过不代表已体验 Mosh。
-
-macOS/Linux 完成标准 check → setup → verify 后，在本人交互终端运行：
+只支持终端模式的 OCI Hub 设备包，VM 主机名总是 `oci-hub-<员工ID>`。setup 会为本设备 SSH 配置增加 `<员工ID>-vm` 别名，并在 `~/.ssh/config` 第一行加入 `Include "<本设备 ssh_config 绝对路径>"`，使系统自带的 `ssh`/`mosh` 直接读取本设备配置（主机校验仍然严格）。`~/.ssh` 不存在时以 700 创建，`~/.ssh/config` 不存在时以 600 创建；已有相同 Include 行时只保留一行并移到第一行，其他内容不改动。Include 在 setup 最后一步写入；`~/.ssh` 不可写，或 `~/.ssh/config` 为符号链接、硬链接或不可写时返回 `SSH_CONFIG_UNSAFE`，`~/.ssh` 不被改动（隧道与本设备配置已完成），请本人决定如何处理。之后在本人交互终端直接运行：
 
 ```bash
-bash ./bootstrap.sh connect
-# 退出 SSH 后，从同一个本机源码目录运行：
-bash ./bootstrap.sh mosh
-```
-
-### 一条命令登录：`<员工ID>-vm`
-
-1.1.0 起，包内 VM 主机名为 `oci-hub-<员工ID>` 时，setup 会为本设备 SSH 配置增加 `<员工ID>-vm` 别名，并在 `~/.ssh/config` 第一行加入 `Include "<本设备 ssh_config 绝对路径>"`，使系统自带的 `ssh`/`mosh` 直接读取本设备配置（主机校验仍然严格）。`~/.ssh` 不存在时以 700 创建，`~/.ssh/config` 不存在时以 600 创建；已有相同 Include 行时只保留一行并移到第一行，其他内容不改动。Include 在 setup 最后一步写入；`~/.ssh` 不可写，或 `~/.ssh/config` 为符号链接、硬链接或不可写时返回 `SSH_CONFIG_UNSAFE`，`~/.ssh` 不被改动（隧道与本设备配置已完成），请本人决定如何处理。之后在本人交互终端直接运行：
-
-```bash
-ssh <员工ID>-vm
 mosh <员工ID>-vm
+ssh <员工ID>-vm
 ```
 
-已用 1.0.0 完成 setup 的设备，更新源码后对同一设备包重跑 setup 即原地升级本设备 `ssh_config` 并加入 Include，无需新设备包。上面的 `bootstrap.sh connect`、`bootstrap.sh mosh` 继续可用，作为备选。
+**确认别名生效：** 员工 ID 取自 setup/verify 输出 JSON 的 `vm_hostname`（`oci-hub-<员工ID>`），例如 `employee='alice'; vm_alias="${employee}-vm"; ssh -G "$vm_alias" | grep -E '^(hostname|user) '`。`hostname` 应是 manifest 里的 `ssh_gateway`（VM 在 VPN 内的连接地址），`user` 应是 `employee`；未定义的别名会原样回显为 hostname。登录后在 VM 里运行 `hostname`，应为 `oci-hub-<员工ID>`。
 
-脚本从本设备包读取端口、alias 和 SSH 配置，保持严格主机校验。出现 `MOSH_CLIENT_MISSING` 时按下表取得安装授权并安装客户端；出现 `INTERACTIVE_TERMINAL_REQUIRED` 时，由 Agent 打开本人的交互终端运行同一命令，不通过管道驱动 Mosh 或记录握手输出。没有本次原生 Mosh 分配会返回 `MOSH_NOT_CONFIGURED`。
+已用 1.0.0 完成 setup 的设备，更新源码后对同一设备包重跑 setup 即原地升级本设备 `ssh_config` 并加入 Include，无需新设备包。
 
-Windows 用原生 PowerShell 完成 check/setup/verify/connect；`bootstrap.ps1 mosh` 返回 `MOSH_WSL_REQUIRED`。按下面 WSL 约定只适配这一设备的新方案 SSH 配置、key、known_hosts 到本人 Linux 目录，保留 host pin 和 `oci-hub-<device_id>` alias；在 WSL 运行：
+备选：从本机源码目录运行 `bash ./bootstrap.sh mosh`（SSH 用 `bash ./bootstrap.sh connect`）。它用 `ssh -F <本设备 ssh_config>` 连接 alias，保持严格主机校验；VM 运行原生 mosh-server，开放默认 UDP 60000–61000，不需要指定服务端命令或端口。出现 `MOSH_CLIENT_MISSING` 时重跑 `setup --install-clients`；出现 `INTERACTIVE_TERMINAL_REQUIRED` 时，打开本人的交互终端运行同一命令，不通过管道驱动 Mosh 或记录握手输出。
+
+## Windows
+
+VPN 永远由 Windows 原生 WireGuard 承载（`bootstrap.ps1 setup`），不在 WSL 里运行 setup。setup 之后，`%USERPROFILE%\.ssh\config` 第一行已 Include 本设备配置，PowerShell 里可直接 `ssh <员工ID>-vm`。Mosh 没有 Windows 原生客户端，按下面顺序选一种：
+
+先检查 WSL（PowerShell）：
+
+```powershell
+wsl.exe -l -q
+```
+
+有输出（至少一个发行版名）且退出码为 0 → 用 [方式 A：WSL](#方式-awsl)；否则 → [方式 B：MobaXterm](#方式-bmobaxterm)。两种都不行时用 [方式 C](#方式-c原生-ssh)。
+
+下面的 `<device_id>` 与 `<员工ID>` 取自 setup/verify 输出 JSON 的 `device_id` 和 `vm_hostname`（`oci-hub-<员工ID>`），由 Agent 替换后再运行。
+
+### 方式 A：WSL
+
+先向员工说明：WSL 是 Windows 里的 Linux 环境，Mosh 在其中运行；安装 Mosh 需要员工输入**WSL 里 Linux 用户的密码**（不是 Windows 密码），只在他自己的 WSL 终端输入。
+
+在 WSL 终端运行（只复制这一台设备的文件，私钥权限 600）：
 
 ```bash
-mosh --ssh='ssh -F "<WSL内本设备ssh_config绝对路径>"' --server=workspace-mosh --port='<包内mosh_ports>' 'oci-hub-<包内device_id>'
+DEVICE='<device_id>'
+WINHOME="$(wslpath "$(cmd.exe /c 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r')")"
+SRC="$WINHOME/EmployeeWorkspace/devices/oci-hub/$DEVICE"
+DST="$HOME/.ssh/remotecc/$DEVICE"
+if [ -e "$DST" ]; then
+  echo "STOP: $DST already exists; ask the employee before replacing it"
+else
+  mkdir -p "$DST" && chmod 700 "$HOME/.ssh" "$HOME/.ssh/remotecc" "$DST"
+  cp "$SRC/client-key" "$SRC/known_hosts" "$DST/" && chmod 600 "$DST/client-key" "$DST/known_hosts"
+  sed -e "s#^\( *IdentityFile \).*#\1\"$DST/client-key\"#" \
+      -e "s#^\( *UserKnownHostsFile \).*#\1\"$DST/known_hosts\"#" \
+      -e 's#^\( *GlobalKnownHostsFile \).*#\1/dev/null#' \
+      "$SRC/ssh_config" > "$DST/ssh_config" && chmod 600 "$DST/ssh_config"
+fi
 ```
 
-如需在 WSL 中也用一条命令登录：适配后的 `ssh_config` 第一行写为 `Host oci-hub-<包内device_id> <员工ID>-vm`（`<员工ID>` 取包内 `vm_hostname` 去掉 `oci-hub-` 前缀；不是该格式时不加别名）；WSL 内 `~/.ssh` 不存在时以 700 创建，`~/.ssh/config` 不存在时以 600 创建，并在其第一行加入 `Include "<WSL内本设备ssh_config绝对路径>"`（已有相同行不重复，不改动原有内容；该文件为符号链接时停止并询问本人）。之后在 WSL 运行 `ssh <员工ID>-vm` 或 `mosh <员工ID>-vm`。
+成功：`ssh -G -F "$DST/ssh_config" <员工ID>-vm | grep -E '^(hostname|user|identityfile) '` 显示 manifest 里的 `ssh_gateway`（VM 在 VPN 内的连接地址）、`employee` 和 `$DST/client-key`。登录后在 VM 里运行 `hostname`，应为 `oci-hub-<员工ID>`。
 
-Agent 将模板替换为实际值后再交给本人。WSL 共用 Windows VPN，不执行 Linux WireGuard setup。接下来仍按本页固定验收表核对本人 VM、输入与重连；服务端版本命令改为新 alias 下的 `workspace-mosh --version`。本次可以跳过 Claude 登录；需要时先 SSH 进入 VM 再运行 `workspace-login`，不主动打开桌面或本机 Claude 授权页面。此终端包没有新增桌面通道；需要图形认证时沿用已验证的原桌面入口，缺少可用入口则交管理员处理，不猜测 URL 或修改证书。
+再把 Include 放到 WSL `~/.ssh/config` 第一行（已有相同行时不重复；该文件是符号链接时停止并询问员工）：
 
-## 旧网关模式
+```bash
+INC="Include \"$DST/ssh_config\""
+if [ -L "$HOME/.ssh/config" ]; then
+  echo 'STOP: ~/.ssh/config is a symlink; ask the employee'
+else
+  touch "$HOME/.ssh/config" && chmod 600 "$HOME/.ssh/config"
+  if [ "$(head -n 1 "$HOME/.ssh/config")" != "$INC" ]; then
+    { printf '%s\n' "$INC"; grep -vxF "$INC" "$HOME/.ssh/config"; } > "$HOME/.ssh/config.new" &&
+      chmod 600 "$HOME/.ssh/config.new" && mv "$HOME/.ssh/config.new" "$HOME/.ssh/config"
+  fi
+fi
+```
 
-以下步骤适用于原 v1 包与 `employee-mosh` 网关命令。
+安装 Mosh（员工输入 WSL Linux 密码）：`sudo apt-get update && sudo apt-get install -y mosh`；成功：`mosh --version` 退出 0。之后员工在 WSL 终端运行 `mosh <员工ID>-vm`。
 
-## 1. 确认接入和设备身份
+没有任何发行版、员工又愿意安装时：管理员 PowerShell 运行 `wsl --install -d Ubuntu`，按提示重启并创建 Linux 用户（只能由员工操作），然后回到本节。
 
-先按 README 检查已有设备包与已安装配置。同一设备复用原身份；原 ZIP 已删除但已安装配置完整时，不必重做 setup。缺少必要文件时，从员工提示词提供的私人下载链接按 [下载指引](download.md) 恢复；缺少链接或链接失效时请管理员补发，不重新开户或生成密钥。
+### 方式 B：MobaXterm
 
-保持本设备 WireGuard 开启，先完成 [标准连接验证](verification.md)。Claude 待登录不阻止终端试用；网络、身份、VM 或 SFTP 验证失败时先报告失败。
+先向员工说明：Windows 没有原生 Mosh，MobaXterm Home Edition 是免费的 Windows 终端，自带 Mosh。请员工从官方页面 https://mobaxterm.mobatek.net/download-home-edition.html 下载安装（Installer 或 Portable 均可）。
 
-从当前设备实际使用的 `ssh_config` 读取 `workspace` 的有效 `User` 和 `HostName`；默认配置在 `~/EmployeeWorkspace/devices/<device_id>/ssh_config`，旧路径沿用现有配置。不要通过员工姓名猜设备账号，不扫描其他人的配置，不打印私钥。
+Agent 在 PowerShell 打印新建会话要填的值（只打印路径和公开信息，不打印密钥内容）：
 
-管理员必须在员工复制给 Agent 的提示词中提供 Mosh 服务端命令及本设备端口范围。**Agent 看不到员工的邮件：不得要求它参考邮件正文、附件说明或“下表”。** 同一人使用多份设备身份时，每份身份的端口可能不同。没有匹配参数就停止并索取，不套用其他设备端口。真实员工账号、下载链接和端口分配不写入公开仓库。
+```powershell
+$state="$env:USERPROFILE\EmployeeWorkspace\devices\oci-hub\<device_id>"
+Select-String -Path "$state\ssh_config" -Pattern '^\s*(Host|HostName|User|Port) '
+"Private key: $state\client-key"
+ssh-keygen.exe -lf "$state\known_hosts"
+```
 
-## 2. 安装本机客户端
+请员工在 MobaXterm 点 **Session → Mosh**，填写：
 
-Agent 负责检查和执行安装，系统提权、密码及重启由本人确认。未获得软件安装授权时先取得授权；已明确允许安装本次必要客户端时不重复询问。已有可用 Mosh 时跳过安装。
-
-| 当前连接环境 | 检查与安装 |
+| 字段 | 值 |
 | --- | --- |
-| macOS | 检查 `mosh --version`；缺失时执行 `brew install mosh`。Homebrew 缺失时按其官方指引引导用户授权安装，并确认 PATH 生效。 |
-| Ubuntu / Debian | 检查 `mosh --version`；缺失时执行 `sudo apt-get update && sudo apt-get install -y mosh`。其他 Linux 使用其发行版包管理器。 |
-| Windows | 在 PowerShell 用 `wsl --list --verbose` 检查 WSL；没有可用 Ubuntu 时，引导用户在管理员 PowerShell 执行 `wsl --install -d Ubuntu`，按要求重启并完成首次 Linux 用户设置。在 WSL Ubuntu 中执行上述 apt 安装命令；之后从该 Ubuntu 终端运行 Mosh。 |
+| Remote host | 上面 `HostName` 的值（manifest 的 `ssh_gateway`，VM 在 VPN 内的连接地址） |
+| Specify username | `employee` |
+| Port | `22` |
+| 私钥（Use private key） | 上面打印的 `client-key` 完整路径 |
 
-在实际运行 Mosh 的 macOS、Linux 或 WSL 环境检查：
+首次连接 MobaXterm 会显示主机指纹：必须与上面 `ssh-keygen -lf` 打印的 `SHA256:…` 一致才接受，不一致就停止并联系管理员。
 
-```bash
-mosh --version
-command -v mosh-client
-```
+MobaXterm 连接不上时，不要改服务器或防火墙，改用方式 C，并把现象告诉管理员。
 
-预期：两条命令退出 0，分别显示版本和可执行文件路径。失败时停止，不把“已下载”当成“已安装”。
+### 方式 C：原生 SSH
 
-Windows 继续使用原生 WireGuard 隧道；不要在 WSL 重复执行 VPN setup。先确认 WSL 内也能连接网关 SSH。按当前设备身份把 SSH 配置、私钥和 known_hosts 适配到 WSL 用户自己的 Linux 目录，私钥权限 `600`，修正配置中的绝对路径；保留主机校验，不使用权限过宽的 `/mnt/c` 私钥。只处理这一份明确指定的设备配置。WSL 的实际 SSH/UDP 路径必须验证，安装成功不等于连接成功。
+PowerShell 里直接运行 `ssh <员工ID>-vm`（setup 已加 Include）；没有 Mosh 的断线恢复，但可立即使用。setup 报 `SSH_CONFIG_UNSAFE` 时，改用源码目录的 `powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 connect`。
 
-## 3. 连接本人 VM
+## 确认登录正确
 
-下面是 Agent 的命令模板。把变量替换为本机实际路径和管理员给该设备分配的范围；交给用户时不得留下占位符。
-
-```bash
-ssh_config='/absolute/path/to/this-device/ssh_config'
-mosh_ports='START:END'
-
-# 只查看生效的账号与网关，不读取私钥内容。
-ssh -G -F "$ssh_config" workspace | awk '$1 == "user" || $1 == "hostname"'
-
-# 预期退出 0，输出 Mosh 服务端版本。仅测试已批准的启动命令。
-ssh -F "$ssh_config" -T workspace employee-mosh --version
-
-# 在交互终端运行，不附加任意远端命令。
-mosh --ssh="ssh -F \"$ssh_config\"" \
-  --server=employee-mosh --port="$mosh_ports" workspace
-```
-
-`employee-mosh` 是网关识别的受限启动命令；它固定进入此设备绑定的 VM。不要在员工 VM 内寻找或安装这个同名文件，不修改服务端策略。保留现有 SSH 密钥和严格主机校验；使用已分配的完整端口范围。
-
-沿用 Mosh 默认的 IP 发现方式。不要添加远端 `sh -c` 探测、ProxyJump、服务器端口转发或自制 ssh 垫片；出现 `Access denied.` 时停止，记录脱敏后的账号、请求的端口范围和错误文字交给管理员。握手中的会话密钥不得写入报告或聊天。
-
-## 4. 固定验证与交接
-
-| 检查 | 标准动作 | 预期结果 |
+| 检查 | 动作 | 预期结果 |
 | --- | --- | --- |
-| 安装 | 上述版本与路径命令 | 退出 0，客户端可用。 |
-| 服务端启动入口 | 上述 `employee-mosh --version` | 退出 0，显示版本；无 Access denied。 |
-| Mosh 会话 | 上述交互命令；进入后运行 `whoami`、`hostname` | 用户为 `employee`，主机名与设备包分配的 VM 一致。 |
-| 操作体验 | 本人对比同网络下 SSH / Mosh 的打字、退格和 Ctrl-C | 本人反馈流畅程度与异常；Agent 不代填体验结论。 |
-| 恢复 | 保存工作后，本人短暂断网并恢复网络，保持同一 Mosh 客户端窗口 | 网络和 WireGuard 恢复后会话继续；记录实际恢复结果。 |
+| 客户端 | `mosh --version`、`command -v mosh-client` | 退出 0，客户端可用。 |
+| 目标 VM | 进入后运行 `whoami`、`hostname` | 用户为 `employee`，主机名与设备包的 VM 一致。 |
 
-退出远端 shell 用 `exit`；紧急退出 Mosh 可按 `Ctrl-^`（通常为 Ctrl+Shift+6），松开后按 `.`。主动退出客户端后再次运行启动命令会建立新会话，不保证恢复已退出的 shell。
+不要添加远端 `sh -c` 探测、ProxyJump、端口转发或自制 ssh 垫片；连接被拒绝时停止，把脱敏后的错误文字交给管理员。握手中的会话密钥不得写入报告或聊天。
 
-Agent 验证后生成本设备可重复使用的启动脚本或快捷命令，写清在哪个本机终端运行，并提供 SSH 回退入口。报告安装、连接、目标 VM 和本人体验各自的实际结果；Claude 登录和浏览器体验为可选后续任务，不主动打开登录流程。
+退出远端 shell 用 `exit`；紧急退出 Mosh 可按 `Ctrl-^`（通常为 Ctrl+Shift+6），松开后按 `.`。
 
-参考：[Mosh 安装与使用](https://mosh.org/)、[Homebrew mosh](https://formulae.brew.sh/formula/mosh)、[微软 WSL 安装](https://learn.microsoft.com/en-us/windows/wsl/install)。
+参考：[Mosh](https://mosh.org/)、[Homebrew mosh](https://formulae.brew.sh/formula/mosh)、[微软 WSL 安装](https://learn.microsoft.com/en-us/windows/wsl/install)。

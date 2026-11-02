@@ -28,8 +28,13 @@ claude_auth=user_action_required
 cleanup() { [[ -z "$stage" ]] || rm -rf -- "$stage"; }
 trap cleanup EXIT
 report() {
-    printf '{"schema_version":1,"platform":"%s","code":"%s","package_verified":%s,"client_ready":%s,"tunnel_handshake":"%s","ssh_identity":"%s","assigned_vm":"%s","sudo":"%s","cli":"%s","sftp_roundtrip":"%s","claude_auth":"%s","real_task":"pending"}\n' \
-        "$platform" "$1" "$package_verified" "$client_ready" "$handshake" "$ssh_identity" "$assigned_vm" "$sudo_check" "$cli_check" "$sftp_check" "$claude_auth"
+    # Non-secret identity, only once the manifest is read and the values are plain names.
+    local identity=""
+    if [[ "${device:-}" =~ ^[a-z][a-z0-9-]{0,27}$ && "${vm_hostname:-}" =~ ^[a-z][a-z0-9-]{0,63}$ ]]; then
+        identity=",\"device_id\":\"$device\",\"vm_hostname\":\"$vm_hostname\""
+    fi
+    printf '{"schema_version":1,"platform":"%s","code":"%s","package_verified":%s,"client_ready":%s,"tunnel_handshake":"%s","ssh_identity":"%s","assigned_vm":"%s","sudo":"%s","cli":"%s","sftp_roundtrip":"%s","claude_auth":"%s","real_task":"pending"%s}\n' \
+        "$platform" "$1" "$package_verified" "$client_ready" "$handshake" "$ssh_identity" "$assigned_vm" "$sudo_check" "$cli_check" "$sftp_check" "$claude_auth" "$identity"
 }
 fail() { printf '%s\n' "$2" >&2; report "$1"; exit "${3:-2}"; }
 while [[ $# -gt 0 ]]; do
@@ -85,6 +90,7 @@ if [[ "$platform" == linux ]]; then
         command -v jq >/dev/null || missing+=(jq)
         command -v unzip >/dev/null || missing+=(unzip)
         command -v ip >/dev/null || missing+=(iproute2)
+        command -v mosh >/dev/null || missing+=(mosh)
         if [[ ${#missing[@]} -gt 0 ]]; then
             require_tunnel_admin
             sudo apt-get update >/dev/null 2>&1 &&
@@ -104,7 +110,7 @@ hash_file() {
 if [[ -z "$expected_sha" ]]; then
     [[ -n "$bundle_dir" ]] || fail PACKAGE_HASH_REQUIRED "外部设备包必须提供 --sha256。"
     [[ -f "$bundle" && ! -L "$bundle" && -f "$bundle_dir/device-bundle.sha256" && ! -L "$bundle_dir/device-bundle.sha256" ]] ||
-        fail PACKAGE_MISSING "请先从管理员提供的私人链接下载接入包，仅解开外层 ZIP，并将三份文件保存到 ~/Downloads/employee-workspace/；找不到时可使用项目 deployment/。"
+        fail PACKAGE_MISSING "请从 https://cc.willfan.me/me 下载设备接入包，仅解开外层 ZIP，并将三份文件保存到 ~/Downloads/employee-workspace/（见 README）；找不到时可使用项目 deployment/。"
     expected_sha="$(tr -d '\r\n' < "$bundle_dir/device-bundle.sha256")"
 fi
 [[ "$expected_sha" =~ ^[a-f0-9]{64}$ ]] || fail PACKAGE_HASH_INVALID "设备包摘要格式无效。"
@@ -137,41 +143,24 @@ peer="$(json_get wireguard_public_key)" || fail MANIFEST_INVALID "manifest 缺�
 client_public="$(json_get client_wireguard_public_key)" || fail MANIFEST_INVALID "manifest 缺少设备公钥。"
 endpoint="$(json_get wireguard_endpoint)" || fail MANIFEST_INVALID "manifest 缺少 Endpoint。"
 tunnel="$(json_get tunnel_name)" || fail MANIFEST_INVALID "manifest 缺少隧道名。"
-profile=existing
-ssh_user="$device"
-ssh_alias=workspace
-wg_port=51820
-wg_keepalive=25
-vnet_pattern='^ws-[a-f0-9]{8}$'
-vm_pattern='^employee-[a-z0-9-]{1,40}$'
-extra_fields=""
-access_mode=desktop
-mosh_ports=""
-if [[ "$schema" == 2 && "$tool_version" == 2.0.0 ]]; then
-    profile="$(json_get profile)" || fail MANIFEST_INVALID "Missing profile."
-    ssh_user="$(json_get ssh_user)" || fail MANIFEST_INVALID "Missing native SSH user."
-    ssh_alias="$(json_get ssh_alias)" || fail MANIFEST_INVALID "Missing profile alias."
-    [[ "$profile" == oci-hub && "$ssh_user" == employee && "$ssh_alias" == "oci-hub-$device" ]] || fail MANIFEST_INVALID "Invalid native SSH profile."
-    access_mode="$(json_get access_mode || printf desktop)"
-    if [[ "$access_mode" == mosh ]]; then
-        mosh_ports="$(json_get mosh_ports)" || fail MANIFEST_INVALID "Missing device Mosh ports."
-        [[ "$mosh_ports" =~ ^(6[01][0-9]{3}):(6[01][0-9]{3})$ ]] || fail MANIFEST_INVALID "Invalid Mosh ports."
-        [[ "${mosh_ports%:*}" -le "${mosh_ports#*:}" && "${mosh_ports#*:}" -le 61000 ]] || fail MANIFEST_INVALID "Invalid Mosh range."
-        vm_pattern='^(employee|oci-hub)-[a-z0-9-]{1,40}$'
-        extra_fields="$(printf '%s\n' profile ssh_user ssh_alias access_mode mosh_ports)"
-    elif [[ "$access_mode" == desktop ]]; then
-        desktop_url="$(json_get desktop_url)" || fail MANIFEST_INVALID "Missing target desktop URL."
-        tls_pin="$(json_get tls_certificate_sha256)" || fail MANIFEST_INVALID "Missing target TLS pin."
-        [[ "$desktop_url" == "https://$gateway:8443/" && "$tls_pin" =~ ^[a-f0-9]{64}$ ]] || fail MANIFEST_INVALID "Invalid desktop identity."
-        vm_pattern='^oci-hub-[a-z0-9-]{1,40}$'
-        extra_fields="$(printf '%s\n' profile ssh_user ssh_alias desktop_url tls_certificate_sha256)"
-    else fail MANIFEST_INVALID "Unsupported access mode."; fi
-    wg_port=51824
-    wg_keepalive=15
-    vnet_pattern='^wh-[a-f0-9]{8}$'
-elif [[ "$schema" != 1 || "$tool_version" != 1.0.0 ]]; then
-    fail PACKAGE_VERSION_UNSUPPORTED "Unsupported bundle version."
-fi
+# Only terminal-mode OCI Hub bundles are supported; v1 and desktop bundles are retired.
+unsupported="只支持终端模式的 OCI Hub 设备包（v2、profile=oci-hub、access_mode=mosh）；请联系管理员换发新包，见 README。"
+[[ "$schema" == 2 && "$tool_version" == 2.0.0 ]] || fail MANIFEST_UNSUPPORTED "$unsupported"
+profile="$(json_get profile)" || fail MANIFEST_UNSUPPORTED "$unsupported"
+access_mode="$(json_get access_mode)" || fail MANIFEST_UNSUPPORTED "$unsupported"
+[[ "$profile" == oci-hub && "$access_mode" == mosh ]] || fail MANIFEST_UNSUPPORTED "$unsupported"
+ssh_user="$(json_get ssh_user)" || fail MANIFEST_INVALID "Missing native SSH user."
+ssh_alias="$(json_get ssh_alias)" || fail MANIFEST_INVALID "Missing profile alias."
+[[ "$ssh_user" == employee && "$ssh_alias" == "oci-hub-$device" ]] || fail MANIFEST_INVALID "Invalid native SSH profile."
+mosh_ports="$(json_get mosh_ports)" || fail MANIFEST_INVALID "Missing device Mosh ports."
+[[ "$mosh_ports" =~ ^(6[01][0-9]{3}):(6[01][0-9]{3})$ ]] || fail MANIFEST_INVALID "Invalid Mosh ports."
+[[ "${mosh_ports%:*}" -le "${mosh_ports#*:}" && "${mosh_ports#*:}" -le 61000 ]] || fail MANIFEST_INVALID "Invalid Mosh range."
+# Employee IDs are at most 20 characters, as on the administrator side.
+vm_pattern='^oci-hub-[a-z][a-z0-9-]{0,19}$'
+extra_fields="$(printf '%s\n' profile ssh_user ssh_alias access_mode mosh_ports)"
+wg_port=51824
+wg_keepalive=15
+vnet_pattern='^wh-[a-f0-9]{8}$'
 expected_fields="$(printf '%s\n' schema_version tool_version device_id vm_hostname ssh_gateway wireguard_address wireguard_public_key client_wireguard_public_key wireguard_endpoint tunnel_name $extra_fields | sort)"
 if [[ "$platform" == macos ]]; then
     actual_fields="$(/usr/bin/plutil -convert xml1 -o - "$stage/manifest.json" 2>/dev/null | awk -F '[<>]' '/<key>/ {print $3}' | sort)"
@@ -183,10 +172,7 @@ fi
    "$tunnel" =~ $vnet_pattern && "$peer" =~ ^[A-Za-z0-9+/]{43}=$ &&
    "$client_public" =~ ^[A-Za-z0-9+/]{43}=$ ]] || fail MANIFEST_INVALID "设备或公钥格式无效。"
 # Login alias for the system ssh/mosh: <employee-id>-vm, derived from oci-hub-<employee-id>.
-vm_alias=""
-if [[ "$profile" == oci-hub && "$vm_hostname" =~ ^oci-hub-[a-z][a-z0-9-]{0,19}$ ]]; then
-    vm_alias="${vm_hostname#oci-hub-}-vm"
-fi
+vm_alias="${vm_hostname#oci-hub-}-vm"
 valid_ip() {
     local value="$1" part
     local parts
@@ -229,8 +215,12 @@ if [[ -d "$state_root" ]]; then
 fi
 if [[ "$platform" == macos ]] && $install_clients; then
     if ! command -v wg >/dev/null || ! command -v wg-quick >/dev/null || ! command -v wireguard-go >/dev/null; then
-        command -v brew >/dev/null || fail HOMEBREW_REQUIRED "请按 docs/manual-macos.md 安装 Homebrew，再重跑相同命令。"
+        command -v brew >/dev/null || fail HOMEBREW_REQUIRED "请按 README 安装 Homebrew，再重跑相同命令。"
         brew install wireguard-tools >/dev/null 2>&1 || fail INSTALL_FAILED "WireGuard CLI 安装失败；检查 Homebrew 安装结果。"
+    fi
+    if ! command -v mosh >/dev/null; then
+        command -v brew >/dev/null || fail HOMEBREW_REQUIRED "请按 README 安装 Homebrew，再重跑相同命令。"
+        brew install mosh >/dev/null 2>&1 || fail INSTALL_FAILED "Mosh 客户端安装失败；检查 Homebrew 安装结果。"
     fi
 fi
 wg_bin="$(command -v wg || true)"
@@ -354,7 +344,9 @@ install_ssh_include() {
     local tmp mode
     if [[ ! -d "$user_ssh_dir" ]]; then mkdir -m 700 "$user_ssh_dir" || return 1; fi
     if [[ -e "$user_ssh_config" ]]; then
-        [[ "$(head -n 1 "$user_ssh_config")" != "$include_line" ]] || return 0
+        # Done only when the line is first and appears once; otherwise rewrite and deduplicate.
+        if [[ "$(head -n 1 "$user_ssh_config")" == "$include_line" ]] &&
+            [[ "$(grep -cxF -- "$include_line" "$user_ssh_config")" == 1 ]]; then return 0; fi
         if [[ "$platform" == macos ]]; then mode="$(stat -f %Lp "$user_ssh_config")" || return 1
         else mode="$(stat -c %a "$user_ssh_config")" || return 1; fi
     else mode=600; fi
@@ -499,16 +491,16 @@ case "$action" in
         report DISCONNECTED ;;
     mosh)
         require_installed
-        [[ "$profile" == oci-hub && "$access_mode" == mosh ]] || fail MOSH_NOT_CONFIGURED "This bundle has no native Mosh assignment."
         command -v mosh >/dev/null && command -v mosh-client >/dev/null || fail MOSH_CLIENT_MISSING "Install Mosh in this terminal environment with user approval; see docs/mosh.md."
         # Mosh is interactive: never run it through a pipe or record its handshake key.
         [[ -t 0 && -t 1 ]] || fail INTERACTIVE_TERMINAL_REQUIRED "Run this same mosh command in the user's interactive terminal."
         config="$state/ssh_config"
         cleanup
         stage=""
-        # --ssh is parsed as a command by Mosh; quote the path as shell data.
-        quoted_config="$(jq -nr --arg path "$config" '$path|@sh')"
-        exec mosh --ssh="ssh -F $quoted_config" --server=workspace-mosh --port="$mosh_ports" "$ssh_alias"
+        # --ssh is split into words by Mosh; quote the path with bash itself (no jq on macOS).
+        quoted_config="$(printf '%q' "$config")"
+        # The VM runs a native mosh-server with the default UDP range open.
+        exec mosh --ssh="ssh -F $quoted_config" "$ssh_alias"
         ;;
     connect|sftp)
         require_installed
@@ -525,12 +517,6 @@ case "$action" in
         prefix="WS_${nonce}"
         # One complete command fits the PTY line discipline. No queued commands
         # remain for a CLI or shell hook to consume. No gateway command is appended.
-        if [[ "$profile" == oci-hub && "$access_mode" == desktop ]]; then
-            command -v openssl >/dev/null || fail DEPENDENCY_MISSING "TLS pin verification requires openssl."
-            run_bounded 15 openssl s_client -connect "$gateway:8443" -servername "$gateway" < /dev/null > "$stage/tls-peer" 2>/dev/null || fail TLS_PIN_FAILED "Target TLS handshake failed."
-            openssl x509 -in "$stage/tls-peer" -outform DER -out "$stage/tls.der" 2>/dev/null || fail TLS_PIN_FAILED "Target TLS certificate invalid."
-            [[ "$(hash_file "$stage/tls.der")" == "$tls_pin" ]] || fail TLS_PIN_FAILED "Target TLS identity mismatch."
-        fi
         payload="$(sed -e "s/__PREFIX__/$prefix/g" -e "s/__VM__/$vm_hostname/g" "$repo_dir/scripts/verify-session.py" | base64 | tr -d '\r\n')"
         [[ ${#payload} -lt 3500 ]] || fail SSH_PROTOCOL_FAILED "Verification payload exceeds the PTY line limit."
         printf "stty -echo; exec python3 -c 'import base64;exec(base64.b64decode(\"%s\"))' </dev/null\n" "$payload" > "$stage/verify-input"

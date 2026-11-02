@@ -2,7 +2,7 @@
   "schema_version": 2,
   "tool_version": "2.0.0",
   "device_id": "alice",
-  "vm_hostname": "employee-fixture",
+  "vm_hostname": "oci-hub-alice",
   "ssh_gateway": "10.234.0.2",
   "wireguard_address": "10.235.0.2/32",
   "wireguard_endpoint": "203.0.113.10",

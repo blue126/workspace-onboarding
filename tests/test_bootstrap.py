@@ -40,10 +40,12 @@ class Bootstrap(unittest.TestCase):
         self.state = self.path / "private state"
         self.package = self.path / "fixture.zip"
         self.manifest = {
-            "schema_version": 1, "tool_version": "1.0.0", "device_id": "ed-fixture-test",
-            "vm_hostname": "employee-fixture", "ssh_gateway": "10.77.0.1",
+            # Only terminal-mode OCI Hub bundles are supported.
+            "schema_version": 2, "tool_version": "2.0.0", "device_id": "ed-fixture-test",
+            "vm_hostname": "oci-hub-fixture", "ssh_gateway": "10.77.0.1",
             "wireguard_address": "10.77.0.2/32", "wireguard_endpoint": "203.0.113.10",
-            "tunnel_name": "ws-1234abcd",
+            "tunnel_name": "wh-1234abcd", "profile": "oci-hub", "ssh_user": "employee",
+            "ssh_alias": "oci-hub-ed-fixture-test", "access_mode": "mosh", "mosh_ports": "60030:60039",
             "wireguard_public_key": base64.b64encode(b"a"*32).decode(),
             "client_wireguard_public_key": base64.b64encode(b"b"*32).decode(),
         }
@@ -112,7 +114,7 @@ class Bootstrap(unittest.TestCase):
         old.parent.mkdir(parents=True)
         old.write_text("existing-user-config")
         self.setup()
-        installed=profile/"EmployeeWorkspace"/"devices"/self.manifest["device_id"]
+        installed=profile/"EmployeeWorkspace"/"devices"/"oci-hub"/self.manifest["device_id"]
         self.assertTrue((installed/"ssh_config").is_file())
         self.assertIn(str(installed.resolve()).replace("\\","/"),(installed/"ssh_config").read_text())
         self.assertEqual(old.read_text(),"existing-user-config")
@@ -270,6 +272,38 @@ elif name=="ip":
             path.write_text("#!"+sys.executable+"\n"+dispatch)
             path.chmod(0o755)
 
+    def install_env(self):
+        # Record package-manager calls; keep the host's real Mosh off PATH.
+        for name in ("brew","apt-get"):
+            path=self.bin/name
+            path.write_text("#!"+sys.executable+"\nimport json,os,pathlib,sys\n"
+                "with (pathlib.Path(os.environ['FIXTURE'])/'installs.jsonl').open('a') as f:"
+                "f.write(json.dumps([pathlib.Path(sys.argv[0]).name,sys.argv[1:]])+'\\n')\n")
+            path.chmod(0o755)
+        self.env["PATH"]=os.pathsep.join([str(self.bin),"/usr/bin","/bin","/usr/sbin","/sbin"])
+
+    def installs(self):
+        log=self.path/"installs.jsonl"
+        return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+    @unittest.skipIf(WINDOWS,"Windows uses Mosh in WSL")
+    def test_install_clients_installs_missing_mosh(self):
+        self.install_env()
+        search=self.env["PATH"]+(":/opt/homebrew/bin:/usr/local/bin" if sys.platform=="darwin" else "")
+        if shutil.which("mosh",path=search):self.skipTest("host Mosh is on the bootstrap PATH")
+        self.call("setup","--no-activate","--install-clients",code="CONFIGURED")
+        if sys.platform=="darwin":
+            self.assertIn(["brew",["install","mosh"]],self.installs())
+        else:
+            self.assertIn("mosh",[arg for name,args in self.installs() if name=="apt-get" and args[:2]==["install","-y"] for arg in args])
+
+    @unittest.skipIf(WINDOWS,"Windows uses Mosh in WSL")
+    def test_install_clients_keeps_existing_mosh(self):
+        self.install_env()
+        p=self.bin/"mosh";p.write_text("#!/bin/sh\nexit 0\n");p.chmod(0o755)
+        self.call("setup","--no-activate","--install-clients",code="CONFIGURED")
+        self.assertFalse([1 for name,args in self.installs() if "mosh" in args])
+
     def test_hash_rejected_before_import(self):
         self.package.write_bytes(self.package.read_bytes()+b"changed")
         self.call("setup", code="PACKAGE_HASH_MISMATCH")
@@ -292,15 +326,15 @@ elif name=="ip":
         self.call("setup", code="PACKAGE_TOO_LARGE" if not WINDOWS else "PACKAGE_UNSAFE")
 
     def test_email_username_device_id_needs_no_prefix(self):
-        self.manifest['device_id']='zhang171903992'
+        self.manifest.update(device_id='zhang171903992',ssh_alias='oci-hub-zhang171903992')
         self.data['manifest.json']=json.dumps(self.manifest).encode()
         self.bundle()
         self.setup()
-        installed=self.state/'zhang171903992'
-        self.assertIn('User zhang171903992',(installed/'ssh_config').read_text())
+        installed=self.state/'oci-hub'/'zhang171903992'
+        self.assertIn('Host oci-hub-zhang171903992',(installed/'ssh_config').read_text())
     def test_setup_is_idempotent_and_private(self):
         self.setup()
-        installed=self.state/self.manifest["device_id"]
+        installed=self.native_state()
         before={p.name:p.read_bytes() for p in installed.iterdir()}
         self.setup()
         self.assertEqual(before,{p.name:p.read_bytes() for p in installed.iterdir()})
@@ -308,14 +342,14 @@ elif name=="ip":
         self.assertIn("StrictHostKeyChecking yes",config)
         self.assertIn("ProxyCommand none",config)
         self.assertIn("ClearAllForwardings yes",config)
-        self.assertNotIn("PostUp",next(installed.glob("ws-*.conf")).read_text())
+        self.assertNotIn("PostUp",next(installed.glob("wh-*.conf")).read_text())
         if not WINDOWS:
             self.assertEqual(stat.S_IMODE(installed.stat().st_mode),0o700)
             for path in installed.iterdir():self.assertEqual(stat.S_IMODE(path.stat().st_mode),0o600)
 
     def test_existing_different_identity_not_overwritten(self):
         self.setup()
-        key=self.state/self.manifest["device_id"]/"client-key"
+        key=self.native_state()/"client-key"
         key.write_text("changed-by-user")
         self.call("setup",code="CONFIG_CONFLICT")
         self.assertEqual(key.read_text(),"changed-by-user")
@@ -486,29 +520,28 @@ elif name=="ip":
         self.assertFalse((self.path/"tunnel-active").exists())
 
     def hub_manifest(self):
-        self.manifest.update(schema_version=2,tool_version='2.0.0',profile='oci-hub',ssh_user='employee',ssh_alias='oci-hub-'+self.manifest['device_id'],vm_hostname='oci-hub-fixture',tunnel_name='wh-1234abcd',desktop_url='https://'+self.manifest['ssh_gateway']+':8443/',tls_certificate_sha256=hashlib.sha256(b'synthetic DER').hexdigest())
+        # The default fixture is already the only supported kind; rebuild after edits.
+        self.manifest.update(ssh_alias='oci-hub-'+self.manifest['device_id'])
         self.data['manifest.json']=json.dumps(self.manifest).encode()
         self.bundle()
         if not WINDOWS:self.stubs()
 
-    def test_hub_native_setup_keeps_same_device_v1_state(self):
-        self.setup()
-        old=self.state/self.manifest['device_id']/'ssh_config'
-        before=old.read_bytes()
-        self.hub_manifest();self.setup()
-        target=self.state/'oci-hub'/self.manifest['device_id']
-        config=(target/'ssh_config').read_text()
-        self.assertIn('User employee',config)
-        self.assertIn('Host oci-hub-'+self.manifest['device_id'],config)
-        wg=next(target.glob('wh-*.conf')).read_text()
-        self.assertIn(':51824',wg);self.assertIn('PersistentKeepalive = 15',wg)
-        self.assertEqual(old.read_bytes(),before)
+    def test_retired_v1_and_desktop_bundles_are_unsupported(self):
+        v1={k:v for k,v in self.manifest.items() if k not in ('profile','ssh_user','ssh_alias','access_mode','mosh_ports')}
+        v1.update(schema_version=1,tool_version='1.0.0',tunnel_name='ws-1234abcd',vm_hostname='employee-fixture')
+        desktop={k:v for k,v in self.manifest.items() if k not in ('access_mode','mosh_ports')}
+        desktop.update(desktop_url='https://10.77.0.1:8443/',tls_certificate_sha256='a'*64)
+        for manifest in (v1,desktop,dict(self.manifest,access_mode='desktop')):
+            self.data['manifest.json']=json.dumps(manifest).encode();self.bundle()
+            run,_=self.call('setup',code='MANIFEST_UNSUPPORTED')
+            self.assertIn('README',run.stderr)
+            self.assertFalse(self.state.exists())
 
     def test_hub_unknown_profile_and_fields_rejected(self):
         self.hub_manifest();self.manifest['profile']='existing'
         self.data['manifest.json']=json.dumps(self.manifest).encode();self.bundle()
-        self.call('setup',code='MANIFEST_INVALID')
-        self.hub_manifest();self.manifest['PostUp']='echo no'
+        self.call('setup',code='MANIFEST_UNSUPPORTED')
+        self.manifest['profile']='oci-hub';self.manifest['PostUp']='echo no'
         self.data['manifest.json']=json.dumps(self.manifest).encode();self.bundle()
         self.call('setup',code='MANIFEST_INVALID')
 
@@ -538,7 +571,7 @@ elif name=="ip":
         self.hub_manifest();self.manifest.update(device_id='alice',ssh_alias='oci-hub-alice')
         schema=json.loads((ROOT/'schemas/bundle-manifest.schema.json').read_text())
         jsonschema.validate(self.manifest,schema)
-        for name in ('bundle-manifest.example.json','bundle-manifest.oci-hub.example.json','bundle-manifest.v1.example.json'):
+        for name in ('bundle-manifest.oci-hub-mosh.example.json',):
             jsonschema.validate(json.loads((ROOT/'examples'/name).read_text()),schema)
         self.data['manifest.json']=json.dumps(self.manifest).encode();self.bundle()
         self.setup()
@@ -546,25 +579,8 @@ elif name=="ip":
         bad=dict(self.manifest,device_id='alice;bad')
         with self.assertRaises(jsonschema.ValidationError):jsonschema.validate(bad,schema)
 
-    @unittest.skipIf(WINDOWS,'TLS fixture uses Unix openssl stub; Windows needs synthetic TLS server')
-    def test_hub_verify_reuses_session_and_target_tls_pin(self):
-        self.hub_manifest();self.call('setup',code='CONFIGURED')
-        self.call('verify',code='CONNECTION_VERIFIED')
-
     def mosh_manifest(self):
         self.hub_manifest()
-        for field in ('desktop_url','tls_certificate_sha256'):self.manifest.pop(field)
-        self.manifest.update(access_mode='mosh',mosh_ports='60030:60039',vm_hostname='employee-fixture')
-        self.data['manifest.json']=json.dumps(self.manifest).encode();self.bundle()
-        if not WINDOWS:self.stubs()
-
-    def test_terminal_hub_bundle_preserves_v1_state_without_desktop_fields(self):
-        self.setup();old=self.state/self.manifest['device_id']/'ssh_config';saved=old.read_bytes()
-        self.mosh_manifest();self.setup()
-        self.assertEqual(old.read_bytes(),saved)
-        native=self.state/'oci-hub'/self.manifest['device_id']
-        self.assertIn('User employee',(native/'ssh_config').read_text())
-        self.assertFalse('desktop_url' in json.loads((native/'manifest.json').read_text()))
 
     def test_terminal_mosh_ports_and_extra_desktop_fields_rejected(self):
         self.mosh_manifest()
@@ -603,7 +619,8 @@ elif name=="ip":
             self.assertEqual(result.returncode,0,result.stderr)
         finally:os.close(slave);os.close(master)
         args=json.loads((self.path/'mosh-args.json').read_text())
-        self.assertIn('--server=workspace-mosh',args);self.assertIn('--port=60030:60039',args)
+        # Native mosh-server with the default UDP range: no custom server or port.
+        self.assertFalse([a for a in args if a.startswith(('--server','--port'))],args)
         self.assertEqual(args[-1],'oci-hub-'+self.manifest['device_id'])
         ssh_command=next(arg[len('--ssh='):] for arg in args if arg.startswith('--ssh='))
         expected=str((self.state/'oci-hub'/self.manifest['device_id']/'ssh_config').resolve())
@@ -767,19 +784,127 @@ elif name=="ip":
         resolved=self.resolve_host('fixture-vm')
         self.assertEqual((resolved['hostname'],resolved['user']),('10.77.0.1','employee'))
 
+    def test_vm_hostname_must_be_an_oci_hub_employee_id(self):
+        for host in ('employee-fixture','oci-hub-'+'a'*21,'oci-hub-9abc'):
+            self.manifest['vm_hostname']=host
+            self.data['manifest.json']=json.dumps(self.manifest).encode();self.bundle()
+            self.call('check',code='MANIFEST_INVALID')
+
     @unittest.skipIf(WINDOWS,'Unix ssh_config Include')
-    def test_alias_not_added_without_oci_hub_employee_hostname(self):
+    def test_alias_follows_vm_hostname_not_device_id(self):
+        self.manifest.update(device_id='laptop-2',ssh_alias='oci-hub-laptop-2',vm_hostname='oci-hub-'+'a'*20)
+        self.data['manifest.json']=json.dumps(self.manifest).encode();self.bundle();self.stubs()
         self.setup()
-        self.assertFalse((self.home/'.ssh').exists())
-        self.mosh_manifest();self.setup()
-        self.assertEqual((self.native_state()/'ssh_config').read_text().splitlines()[0],'Host oci-hub-'+self.manifest['device_id'])
-        self.assertFalse((self.home/'.ssh').exists())
-        for field in ('access_mode','mosh_ports'):self.manifest.pop(field)
-        self.hub_manifest();self.manifest['vm_hostname']='oci-hub-'+'a'*21
+        self.assertEqual((self.native_state()/'ssh_config').read_text().splitlines()[0],'Host oci-hub-laptop-2 '+'a'*20+'-vm')
+
+    def test_reports_carry_non_secret_device_identity(self):
+        self.mosh_manifest();self.manifest['vm_hostname']='oci-hub-fixture'
         self.data['manifest.json']=json.dumps(self.manifest).encode();self.bundle()
-        self.state=self.path/'other state';self.setup()
-        self.assertNotIn('-vm',(self.native_state()/'ssh_config').read_text().splitlines()[0])
-        self.assertFalse((self.home/'.ssh').exists())
+        if not WINDOWS:self.stubs()
+        _,report=self.setup()
+        self.assertEqual((report['device_id'],report['vm_hostname']),(self.manifest['device_id'],'oci-hub-fixture'))
+        self.package.write_bytes(b'not a zip')
+        _,report=self.call('check',code='PACKAGE_HASH_MISMATCH')
+        self.assertNotIn('device_id',report)
+
+    @unittest.skipUnless(WINDOWS,'Windows ssh_config Include')
+    def test_windows_alias_and_include_in_user_profile(self):
+        self.hub_manifest();self.setup()
+        config=(self.native_state()/'ssh_config').read_text()
+        self.assertEqual(config.splitlines()[0],'Host oci-hub-'+self.manifest['device_id']+' fixture-vm')
+        # Same spelling as the script: GetFullPath, no symlink or short-name expansion.
+        include='Include "'+os.path.abspath(str(self.native_state())).replace('\\','/')+'/ssh_config"'
+        self.assertEqual(self.user_config().read_text().splitlines(),[include])
+        self.user_config().write_bytes(('Host other\n    User someone\n'+include+'\n').encode())
+        self.setup()
+        self.assertEqual(self.user_config().read_text().splitlines(),[include,'Host other','    User someone'])
+        before=self.user_config().read_bytes();self.setup()
+        self.assertEqual(self.user_config().read_bytes(),before)
+        # First but duplicated later: rewritten once, other lines kept.
+        self.user_config().write_bytes((include+'\nHost other\n'+include+'\n').encode())
+        self.setup()
+        self.assertEqual(self.user_config().read_text().splitlines(),[include,'Host other'])
+
+    @unittest.skipUnless(WINDOWS,'Windows ssh_config alias')
+    def test_windows_alias_follows_vm_hostname_not_device_id(self):
+        self.manifest.update(device_id='laptop-2',ssh_alias='oci-hub-laptop-2',vm_hostname='oci-hub-'+'a'*20)
+        self.data['manifest.json']=json.dumps(self.manifest).encode();self.bundle()
+        _,report=self.setup()
+        self.assertEqual((report['device_id'],report['vm_hostname']),('laptop-2','oci-hub-'+'a'*20))
+        self.assertEqual((self.native_state()/'ssh_config').read_text().splitlines()[0],'Host oci-hub-laptop-2 '+'a'*20+'-vm')
+
+    @unittest.skipUnless(WINDOWS,'Windows ssh_config upgrade')
+    def test_windows_pre_alias_ssh_config_upgrades_on_setup(self):
+        self.hub_manifest();self.setup()
+        installed=self.native_state()/'ssh_config';current=installed.read_bytes()
+        installed.write_bytes(b'Host oci-hub-'+self.manifest['device_id'].encode()+b'\n'+current.split(b'\n',1)[1])
+        # check accepts the pre-alias file (the runner may lack WireGuard, hence either code).
+        _,report=self.call('check');self.assertIn(report['code'],('CHECKED','DEPENDENCY_MISSING'))
+        self.setup()
+        self.assertEqual(installed.read_bytes(),current)
+
+    @unittest.skipIf(WINDOWS,'Unix ssh_config Include')
+    def test_alias_include_first_but_duplicated_is_deduplicated(self):
+        self.hub_manifest();self.setup()
+        line=self.include_line()
+        self.user_config().write_text(line+'\nHost other\n'+line+'\n')
+        self.setup()
+        self.assertEqual(self.user_config().read_text(),line+'\nHost other\n')
+
+class OuterZipCheck(unittest.TestCase):
+    """scripts/check-outer-zip.py, exactly as README step 2 runs it."""
+    NAMES=("device-bundle.zip","device-bundle.sha256","README.md")
+
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory(prefix="outer-zip-")
+        self.path=Path(self.temp.name);self.dest=self.path/"employee-workspace"
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def outer(self,attrs=None,names=NAMES):
+        # attrs maps a name to its full 32-bit external attribute.
+        target=self.path/"device-bundle.zip"
+        with zipfile.ZipFile(target,"w") as archive:
+            for name in names:
+                info=zipfile.ZipInfo(name,(1980,1,1,0,0,0))
+                info.external_attr=(attrs or {}).get(name,0o600<<16)
+                archive.writestr(info,b"synthetic")
+        return target
+
+    def check(self,outer):
+        run=subprocess.run([sys.executable,"-I",str(ROOT/"scripts/check-outer-zip.py"),str(outer),str(self.dest)],
+                           capture_output=True,text=True,timeout=20)
+        lines=run.stdout.splitlines()
+        self.assertEqual(len(lines),1,run.stdout+run.stderr)
+        self.assertEqual(run.returncode,0 if lines[0]=="READY" else 1)
+        return lines[0]
+
+    def test_readme_runs_this_exact_command(self):
+        command='python3 -I scripts/check-outer-zip.py "<外层ZIP>" "$HOME/Downloads/employee-workspace"'
+        for doc in ("README.md","docs/download.md"):self.assertIn(command,(ROOT/doc).read_text())
+
+    def test_administrator_and_regular_entries_are_ready(self):
+        self.assertEqual(self.check(self.outer()),"READY")
+        regular={name:(stat.S_IFREG|0o600)<<16 for name in self.NAMES}
+        self.assertEqual(self.check(self.outer(regular)),"READY")
+
+    def test_non_regular_types_and_dos_bits_are_rejected(self):
+        for attr in ((stat.S_IFDIR|0o700)<<16,(stat.S_IFLNK|0o777)<<16,0o030000<<16,(stat.S_IFIFO|0o600)<<16,
+                     0x10,0x400,((stat.S_IFREG|0o600)<<16)|0x400,((stat.S_IFREG|0o600)<<16)|0x10):
+            self.assertEqual(self.check(self.outer({"README.md":attr})),"STOP: not regular files",oct(attr))
+
+    def test_wrong_names_and_unreadable_zip_stop(self):
+        self.assertEqual(self.check(self.outer(names=self.NAMES[:2])),"STOP: unexpected entries")
+        self.assertEqual(self.check(self.outer(names=self.NAMES+("extra",))),"STOP: unexpected entries")
+        self.assertEqual(self.check(self.outer(names=("device-bundle.zip","README.md","README.md"))),"STOP: unexpected entries")
+        self.assertEqual(self.check(self.outer(names=("device-bundle.zip","device-bundle.sha256","sub/README.md"))),"STOP: unexpected entries")
+        broken=self.path/"broken.zip";broken.write_bytes(b"<html>not a zip</html>")
+        self.assertTrue(self.check(broken).startswith("STOP: cannot read outer ZIP"))
+
+    def test_existing_receiving_files_stop_before_extraction(self):
+        self.dest.mkdir();(self.dest/"README.md").write_text("previous delivery")
+        self.assertEqual(self.check(self.outer()),"STOP: already in "+str(self.dest)+": README.md")
 
 if __name__=="__main__":
     unittest.main()
