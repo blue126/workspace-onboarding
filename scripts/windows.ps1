@@ -12,6 +12,8 @@ $ErrorActionPreference='Stop'
 $repoDir=Split-Path $PSScriptRoot -Parent
 $result=[ordered]@{schema_version=1;platform='windows';code='STARTING';package_verified=$false;client_ready=$false;tunnel_handshake='unavailable';ssh_identity='pending';assigned_vm='pending';sudo='pending';cli='pending';sftp_roundtrip='pending';claude_auth='user_action_required';real_task='pending'}
 $stage=$null
+$vmAlias=''
+$sshConfigLegacy=$false
 function Report([string]$Code) { $result.code=$Code; $result | ConvertTo-Json -Compress }
 function Stop-Setup([string]$Code,[string]$Message) { [Console]::Error.WriteLine($Message); Report $Code; exit 2 }
 function Write-Utf8([string]$Path,[string]$Content) {
@@ -90,9 +92,42 @@ function Require-Installed() {
         if(!(Test-Path -LiteralPath $existing -PathType Leaf)) { Stop-Setup 'CONFIG_CONFLICT' 'Installed configuration is incomplete.' }
         Assert-Regular $existing
         if((Hash-File $existing) -cne (Hash-File (Join-Path $stage $name))) {
+            # The pre-alias ssh_config stays usable; only setup upgrades it.
+            if($name -ceq 'ssh_config' -and (Hash-File $existing) -ceq (Hash-File (Join-Path $stage 'ssh_config.v1'))) { $script:sshConfigLegacy=$true; continue }
             Stop-Setup 'CONFIG_CONFLICT' 'Installed configuration differs; nothing overwritten.'
         }
     }
+}
+function Setup-SshInclude() {
+    # Put this device's config first in %USERPROFILE%\.ssh\config so `ssh <id>-vm` works; mirrors unix.sh.
+    if(!$vmAlias) { return }
+    $sshDir=Join-Path $env:USERPROFILE '.ssh'
+    $userConfig=Join-Path $sshDir 'config'
+    $line='Include "'+$stateSsh+'/ssh_config"'
+    if(Test-Path -LiteralPath $sshDir) {
+        $dir=Get-Item -LiteralPath $sshDir -Force
+        if(!$dir.PSIsContainer -or ($dir.Attributes -band [IO.FileAttributes]::ReparsePoint)) { Stop-Setup 'SSH_CONFIG_UNSAFE' '%USERPROFILE%\.ssh is not a plain directory; left unchanged.' }
+    }
+    $lines=@()
+    if(Test-Path -LiteralPath $userConfig) {
+        $item=Get-Item -LiteralPath $userConfig -Force
+        if($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -or ($item.Attributes -band [IO.FileAttributes]::ReadOnly)) { Stop-Setup 'SSH_CONFIG_UNSAFE' '%USERPROFILE%\.ssh\config is a link, directory or read-only; left unchanged.' }
+        $lines=@([IO.File]::ReadAllLines($userConfig))
+        # Done only when the line is first and appears once; otherwise rewrite and deduplicate.
+        if($lines.Count -gt 0 -and $lines[0] -ceq $line -and @($lines | Where-Object { $_ -ceq $line }).Count -eq 1) { return }
+    }
+    try {
+        if(!(Test-Path -LiteralPath $sshDir)) { [void](New-Item -ItemType Directory -Path $sshDir) }
+        # Later copies of the same line move to line 1; every other line is kept as is.
+        $content=(@($line)+@($lines | Where-Object { $_ -cne $line })) -join "`n"
+        if(Test-Path -LiteralPath $userConfig) {
+            # Overwrite in place: the existing file keeps its ACL (File.Replace fails on some profiles).
+            Write-Utf8 $userConfig ($content+"`n")
+        } else {
+            Write-Utf8 $userConfig ($content+"`n")
+            Private-Acl $userConfig
+        }
+    } catch { Stop-Setup 'SSH_CONFIG_WRITE_FAILED' ('Could not add the Include line to %USERPROFILE%\.ssh\config: '+$_.Exception.Message) }
 }
 function Require-OwnedService($Service) {
     $cim=Get-CimInstance Win32_Service -Filter ("Name='"+$serviceName+"'")
@@ -159,7 +194,7 @@ try {
         if(!$bundleDir) { Stop-Setup 'PACKAGE_HASH_REQUIRED' 'External device bundles require -Sha256.' }
         $digestPath=Join-Path $bundleDir 'device-bundle.sha256'
         if(!(Test-Path -LiteralPath $Bundle -PathType Leaf) -or !(Test-Path -LiteralPath $digestPath -PathType Leaf)) {
-            Stop-Setup 'PACKAGE_MISSING' 'Download the three device files from OneDrive to %USERPROFILE%/Downloads/employee-workspace; project deployment/ is the fallback.'
+            Stop-Setup 'PACKAGE_MISSING' 'Download the device bundle from https://cc.willfan.me/me, unpack only the outer ZIP and put its three files in %USERPROFILE%/Downloads/employee-workspace (see README); project deployment/ is the fallback.'
         }
         Assert-Regular $digestPath
         $Sha256=[IO.File]::ReadAllText($digestPath).Trim()
@@ -198,30 +233,21 @@ try {
         }
     } finally { $zip.Dispose() }
     $manifest=Get-Content -LiteralPath (Join-Path $stage 'manifest.json') -Raw | ConvertFrom-Json
-    $profileName='existing'; $sshUser=$manifest.device_id; $sshAlias='workspace'; $wgPort=51820; $wgKeepalive=25
-    $tunnelPattern='^ws-[a-f0-9]{8}$'; $vmPattern='^employee-[a-z0-9-]{1,40}$'
-    $extraFields=@(); $accessMode='desktop'
-    if($manifest.schema_version -eq 2 -and $manifest.tool_version -ceq '2.0.0') {
-        $extraFields=@('profile','ssh_user','ssh_alias')
-        foreach($field in $extraFields) { if(!$manifest.PSObject.Properties[$field]) { Stop-Setup 'MANIFEST_INVALID' 'Missing native SSH field.' } }
-        if($manifest.profile -cne 'oci-hub' -or $manifest.ssh_user -cne 'employee' -or $manifest.ssh_alias -cne ('oci-hub-'+$manifest.device_id)) { Stop-Setup 'MANIFEST_INVALID' 'Invalid native SSH profile.' }
-        if($manifest.PSObject.Properties['access_mode']) { $accessMode=$manifest.access_mode }
-        if($accessMode -ceq 'mosh') {
-            if(!$manifest.PSObject.Properties['mosh_ports']) { Stop-Setup 'MANIFEST_INVALID' 'Missing Mosh ports.' }
-            $extraFields+=@('access_mode','mosh_ports')
-            if($manifest.mosh_ports -cnotmatch '^(6[01][0-9]{3}):(6[01][0-9]{3})$') { Stop-Setup 'MANIFEST_INVALID' 'Invalid Mosh ports.' }
-            $ports=$manifest.mosh_ports.Split(':')
-            if([int]$ports[0] -gt [int]$ports[1] -or [int]$ports[1] -gt 61000) { Stop-Setup 'MANIFEST_INVALID' 'Invalid Mosh range.' }
-            $vmPattern='^(employee|oci-hub)-[a-z0-9-]{1,40}$'
-        } elseif($accessMode -ceq 'desktop') {
-            if(!$manifest.PSObject.Properties['desktop_url'] -or !$manifest.PSObject.Properties['tls_certificate_sha256']) { Stop-Setup 'MANIFEST_INVALID' 'Missing desktop identity.' }
-            $extraFields+=@('desktop_url','tls_certificate_sha256')
-            if($manifest.desktop_url -cne ('https://'+$manifest.ssh_gateway+':8443/') -or $manifest.tls_certificate_sha256 -cnotmatch '^[a-f0-9]{64}$') { Stop-Setup 'MANIFEST_INVALID' 'Invalid desktop identity.' }
-            $vmPattern='^oci-hub-[a-z0-9-]{1,40}$'
-        } else { Stop-Setup 'MANIFEST_INVALID' 'Unsupported access mode.' }
-        $profileName='oci-hub'; $sshUser='employee'; $sshAlias=$manifest.ssh_alias; $wgPort=51824; $wgKeepalive=15
-        $tunnelPattern='^wh-[a-f0-9]{8}$'
-    } elseif($manifest.schema_version -ne 1 -or $manifest.tool_version -cne '1.0.0') { Stop-Setup 'PACKAGE_VERSION_UNSUPPORTED' 'Unsupported bundle version.' }
+    # Only terminal-mode OCI Hub bundles are supported; v1 and desktop bundles are retired.
+    $unsupported='Only terminal-mode OCI Hub bundles (v2, profile=oci-hub, access_mode=mosh) are supported; ask the administrator for a new bundle, see README.'
+    $props=$manifest.PSObject.Properties
+    if(!$props['schema_version'] -or !$props['tool_version'] -or $manifest.schema_version -ne 2 -or $manifest.tool_version -cne '2.0.0' -or
+       !$props['profile'] -or $manifest.profile -cne 'oci-hub' -or !$props['access_mode'] -or $manifest.access_mode -cne 'mosh') { Stop-Setup 'MANIFEST_UNSUPPORTED' $unsupported }
+    $extraFields=@('profile','ssh_user','ssh_alias','access_mode','mosh_ports')
+    foreach($field in $extraFields) { if(!$props[$field]) { Stop-Setup 'MANIFEST_INVALID' 'Missing native SSH field.' } }
+    if($manifest.ssh_user -cne 'employee' -or $manifest.ssh_alias -cne ('oci-hub-'+$manifest.device_id)) { Stop-Setup 'MANIFEST_INVALID' 'Invalid native SSH profile.' }
+    if($manifest.mosh_ports -cnotmatch '^(6[01][0-9]{3}):(6[01][0-9]{3})$') { Stop-Setup 'MANIFEST_INVALID' 'Invalid Mosh ports.' }
+    $ports=$manifest.mosh_ports.Split(':')
+    if([int]$ports[0] -gt [int]$ports[1] -or [int]$ports[1] -gt 61000) { Stop-Setup 'MANIFEST_INVALID' 'Invalid Mosh range.' }
+    # Employee IDs are at most 20 characters, as on the administrator side.
+    $vmPattern='^oci-hub-[a-z][a-z0-9-]{0,19}$'
+    $profileName='oci-hub'; $sshUser='employee'; $sshAlias=$manifest.ssh_alias; $wgPort=51824; $wgKeepalive=15
+    $tunnelPattern='^wh-[a-f0-9]{8}$'
     $fields=@('schema_version','tool_version','device_id','vm_hostname','ssh_gateway','wireguard_address','wireguard_public_key','client_wireguard_public_key','wireguard_endpoint','tunnel_name')+$extraFields
     if(@($manifest.PSObject.Properties).Count -ne $fields.Count) { Stop-Setup 'MANIFEST_INVALID' 'Unexpected manifest properties.' }
     foreach($field in $fields) {
@@ -243,6 +269,10 @@ try {
     $pinCheck=Native $keygenCommand.Source @('-lf',(Join-Path $stage 'known_hosts'))
     if($keyCheck.ExitCode -ne 0 -or $pinCheck.ExitCode -ne 0) { Stop-Setup 'KEY_INVALID' 'OpenSSH could not parse credentials.' }
     $result.package_verified=$true
+    # Non-secret identity for the agent's handover; validated above.
+    $result.device_id=[string]$manifest.device_id; $result.vm_hostname=[string]$manifest.vm_hostname
+    # Login alias <employee-id>-vm, mirroring unix.sh.
+    $vmAlias=$manifest.vm_hostname.Substring(8)+'-vm'
     if(!$StateRoot) { $StateRoot=Join-Path $env:USERPROFILE 'EmployeeWorkspace\devices' }
     $StateRoot=[IO.Path]::GetFullPath($StateRoot)
     if($StateRoot -match '["%\r\n]' -or ($StateRoot+'\').StartsWith($repoDir+'\',[StringComparison]::OrdinalIgnoreCase)) {
@@ -261,8 +291,10 @@ try {
     $serviceName='WireGuardTunnel$'+$manifest.tunnel_name
     $wgConf="[Interface]`nPrivateKey = $wgPrivate`nAddress = $($manifest.wireguard_address)`n`n[Peer]`nPublicKey = $($manifest.wireguard_public_key)`nEndpoint = $($manifest.wireguard_endpoint):$wgPort`nAllowedIPs = $($manifest.ssh_gateway)/32`nPersistentKeepalive = $wgKeepalive`n"
     Write-Utf8 (Join-Path $stage ($manifest.tunnel_name+'.conf')) $wgConf
+    $hostLine='Host '+$sshAlias
+    if($vmAlias) { $hostLine+=' '+$vmAlias }
     $sshConf=@"
-Host $sshAlias
+$hostLine
     HostName $($manifest.ssh_gateway)
     User $sshUser
     Port 22
@@ -287,7 +319,10 @@ Host $sshAlias
     ServerAliveInterval 15
     ServerAliveCountMax 3
 "@
-    Write-Utf8 (Join-Path $stage 'ssh_config') ($sshConf.Replace("`r`n","`n")+"`n")
+    $sshText=$sshConf.Replace("`r`n","`n")+"`n"
+    Write-Utf8 (Join-Path $stage 'ssh_config') $sshText
+    # Output without the alias line, used only to recognize an installation to upgrade.
+    Write-Utf8 (Join-Path $stage 'ssh_config.v1') ('Host '+$sshAlias+"`n"+$sshText.Substring($sshText.IndexOf("`n")+1))
     Write-Utf8 (Join-Path $stage 'bundle.sha256') ($Sha256+"`n")
     $installedFiles=@('client-key','known_hosts','manifest.json','wg.key','ssh_config',($manifest.tunnel_name+'.conf'),'bundle.sha256')
     switch($Action) {
@@ -297,7 +332,13 @@ Host $sshAlias
             Report 'CHECKED'
         }
         'setup' {
-            if(Test-Path -LiteralPath $state) { Require-Installed }
+            if(Test-Path -LiteralPath $state) {
+                Require-Installed
+                if($sshConfigLegacy) {
+                    try { Copy-Item -LiteralPath (Join-Path $stage 'ssh_config') -Destination (Join-Path $state 'ssh_config') -Force; Private-Acl (Join-Path $state 'ssh_config') }
+                    catch { Stop-Setup 'CONFIG_UPGRADE_FAILED' 'Could not upgrade ssh_config; previous file kept.' }
+                }
+            }
             else {
                 if((Test-Path -LiteralPath $StateRoot) -and !(Test-Path -LiteralPath (Join-Path $StateRoot '.workspace-onboarding')) -and @(Get-ChildItem -LiteralPath $StateRoot -Force).Count -gt 0) {
                     Stop-Setup 'STATE_ROOT_CONFLICT' 'Existing directory is not managed by this project.'
@@ -310,7 +351,8 @@ Host $sshAlias
                 Private-Acl $state
                 foreach($name in $installedFiles) { Copy-Item -LiteralPath (Join-Path $stage $name) -Destination (Join-Path $state $name); Private-Acl (Join-Path $state $name) }
             }
-            if($NoActivate) { Report 'CONFIGURED'; exit 0 }
+            # The Include is the last step: an unsafe ~/.ssh/config never blocks the tunnel.
+            if($NoActivate) { Setup-SshInclude; Report 'CONFIGURED'; exit 0 }
             if(!(Admin)) { Stop-Setup 'NEEDS_ADMIN' 'Configuration prepared; rerun setup in elevated PowerShell to activate the tunnel.' }
             if(!$result.client_ready) { Stop-Setup 'DEPENDENCY_MISSING' 'Authorize setup -InstallClients to install WireGuard.' }
             $service=Get-Service -Name $serviceName -ErrorAction SilentlyContinue
@@ -321,6 +363,7 @@ Host $sshAlias
                 $installTunnel=Native $wireguard @('/installtunnelservice',(Join-Path $state ($manifest.tunnel_name+'.conf')))
                 if($installTunnel.ExitCode -ne 0) { Stop-Setup 'TUNNEL_START_FAILED' 'WireGuard tunnel service installation failed.' }
             }
+            Setup-SshInclude
             Report 'CONFIGURED'
         }
         'disconnect' {
@@ -330,7 +373,7 @@ Host $sshAlias
             if($service) { Require-OwnedService $service; Stop-Service -Name $serviceName }
             Report 'DISCONNECTED'
         }
-        'mosh' { Require-Installed; Stop-Setup 'MOSH_WSL_REQUIRED' 'Use Mosh in WSL with this device native SSH config and port assignment; see docs/mosh.md. Do not start a second VPN in WSL.' }
+        'mosh' { Require-Installed; Stop-Setup 'MOSH_WSL_REQUIRED' 'Use Mosh in WSL or MobaXterm with this device SSH config; see docs/mosh.md. Do not start a second VPN in WSL.' }
         'connect' { Require-Installed; & $sshCommand.Source -F $config -tt $sshAlias; exit $LASTEXITCODE }
         'sftp' { Require-Installed; & $sftpCommand.Source -F $config $sshAlias; exit $LASTEXITCODE }
         'verify' {
@@ -339,24 +382,6 @@ Host $sshAlias
             if(!(Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'WireGuard/wg.exe'))) { Stop-Setup 'DEPENDENCY_MISSING' 'WireGuard CLI is missing.' }
             $nonce=[Guid]::NewGuid().ToString('N')
             $prefix='WS_'+$nonce
-            if($profileName -ceq 'oci-hub' -and $accessMode -ceq 'desktop') {
-                $tcp=New-Object Net.Sockets.TcpClient
-                try {
-                    $task=$tcp.ConnectAsync($manifest.ssh_gateway,8443)
-                    if(!$task.Wait(15000)) { throw 'Target TLS timeout.' }
-                    $expectedPin=$manifest.tls_certificate_sha256
-                    $callback=[Net.Security.RemoteCertificateValidationCallback]{ param($sender,$certificate,$chain,$errors)
-                        $algorithm=[Security.Cryptography.SHA256]::Create()
-                        try { return [BitConverter]::ToString($algorithm.ComputeHash($certificate.GetRawCertData())).Replace('-','').ToLowerInvariant() -ceq $expectedPin }
-                        finally { $algorithm.Dispose() }
-                    }
-                    $tls=New-Object Net.Security.SslStream($tcp.GetStream(),$false,$callback)
-                    $tls.ReadTimeout=15000; $tls.WriteTimeout=15000
-                    $tls.AuthenticateAsClient($manifest.ssh_gateway)
-                    $tls.Dispose()
-                } catch { Stop-Setup 'TLS_PIN_FAILED' 'Target TLS identity verification failed.' }
-                finally { $tcp.Dispose() }
-            }
             $source=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'verify-session.py')).Replace('__PREFIX__',$prefix).Replace('__VM__',$manifest.vm_hostname)
             $payload=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($source))
             if($payload.Length -ge 3500) { Stop-Setup 'SSH_PROTOCOL_FAILED' 'Verification payload exceeds the PTY line limit.' }

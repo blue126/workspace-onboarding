@@ -27,12 +27,28 @@ APPLESCRIPT
 
 ### 工具权限拒绝时
 
-如果 Agent 的执行环境明确拒绝 sudo，且不能创建本人可输入的终端，或操作 Terminal 返回权限错误，应停止自动化提权尝试。由 Agent 给出一条使用实际源码路径的 `setup && verify` 命令，让本人在系统 Terminal 中以普通用户运行；密码只在该终端输入。完成后让 Agent 继续核对标准结果和 Mosh 测试。不得修改 sudoers、收集密码或绕过工具权限策略。
+如果 Agent 的执行环境明确拒绝 sudo，且不能创建本人可输入的终端，或操作 Terminal 返回权限错误，应停止自动化提权尝试。由 Agent 给出一条使用实际源码路径的 `setup && verify` 命令，让本人在系统 Terminal 中以普通用户运行；密码只在该终端输入。完成后让 Agent 继续核对标准结果并交接 Mosh 登录。不得修改 sudoers、收集密码或绕过工具权限策略。
 
 `NEEDS_ADMIN` 表示尚未取得必要授权，可能是没有交互输入、授权被取消或 sudo 被拒绝，不能直接解释为“密码没输入”。输出接 `tee` 保存日志时，只要标准输入仍连接本人终端，就应允许 sudo 正常请求授权；重定向标准错误不代表缺少交互终端。
 
 ## Windows / Linux
 
-Windows 由 Agent 发起管理员 PowerShell，由本人确认 UAC，再完成 setup、verify。Linux 由 Agent 创建本人可输入密码的交互会话并完成这两个步骤。授权后继续使用同一会话；不要依赖另一个终端的 sudo 缓存。
+Windows 由 Agent 发起**一个**管理员 PowerShell，由本人确认一次 UAC，再在这同一个窗口里依次运行 setup、verify（安装 WireGuard 隧道服务和 OpenSSH 需要管理员权限）：
+
+```powershell
+Start-Process powershell -Verb RunAs -ArgumentList '-NoExit','-ExecutionPolicy','Bypass','-Command',"Set-Location '$env:USERPROFILE\EmployeeWorkspace\onboarding'"
+```
+
+Agent 读不到该窗口的输出时，请员工把最后一行 JSON 告诉 Agent（其中不含密钥）。
+
+Linux 由 Agent 创建本人可输入密码的交互会话并完成 setup、verify。授权后继续使用同一会话；不要依赖另一个终端的 sudo 缓存。
+
+## 会装什么、为什么
+
+- macOS：setup 用 Homebrew 安装 `wireguard-tools` 与 `mosh`。缺少 Homebrew 时（`HOMEBREW_REQUIRED`），请员工在自己的终端运行官方一行命令 `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`，按提示输入本机密码。Git 和 python3 随 Xcode 命令行工具提供，首次使用时系统会弹窗安装，请员工点「安装」。
+- Linux：setup 用 apt 按需安装 WireGuard（VPN）、OpenSSH 客户端（登录 VM）、jq（读取设备配置）、iproute2（检查路由）、unzip（解开设备包）和 mosh。Git、python3 缺少时用 `sudo apt-get install -y git python3 unzip`。
+- Windows：setup 安装 OpenSSH 客户端和官方 WireGuard；Git 缺少时用 `winget install --id Git.Git -e`。
+
+sudo 通常只需输入一次：它会在几分钟内记住授权（macOS 默认约 5 分钟）。
 
 这里授权的是员工本机建立 VPN 所需的系统操作，与 VM 内 employee 的 sudo 权限分别处理。
