@@ -13,5 +13,7 @@
   "ssh_user": "employee",
   "ssh_alias": "oci-hub-alice",
   "access_mode": "mosh",
-  "mosh_ports": "60030:60039"
+  "mosh_ports": "60000:61000",
+  "desktop_url": "https://10.234.0.2:8443/",
+  "tls_certificate_sha256": "3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f"
 }

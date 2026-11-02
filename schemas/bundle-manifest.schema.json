@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "OCI Hub terminal-only Mosh bundle v2",
+  "title": "OCI Hub unified device bundle v2 (Mosh terminal and VM browser entry)",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -18,7 +18,9 @@
     "ssh_user",
     "ssh_alias",
     "access_mode",
-    "mosh_ports"
+    "mosh_ports",
+    "desktop_url",
+    "tls_certificate_sha256"
   ],
   "properties": {
     "schema_version": {
@@ -73,8 +75,15 @@
       "const": "mosh"
     },
     "mosh_ports": {
+      "const": "60000:61000"
+    },
+    "desktop_url": {
       "type": "string",
-      "pattern": "^6[01][0-9]{3}:6[01][0-9]{3}$"
+      "pattern": "^https://[0-9.]+:8443/$"
+    },
+    "tls_certificate_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
     }
   }
 }

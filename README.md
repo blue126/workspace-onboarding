@@ -6,7 +6,7 @@
 
 本页给出每一步的需求、验收标准和常见问题，具体怎么执行由你根据员工的系统决定；细节见文末 [资料目录](#资料目录)。只有标出的命令需要原样使用。
 
-**支持范围：** 只支持终端模式的 OCI Hub 设备包（v2、`profile=oci-hub`、`access_mode=mosh`），VM 主机名总是 `oci-hub-<员工ID>`。系统：macOS 12+、Ubuntu 22.04+/Debian 12+、Windows 10/11（在 WSL 里运行的 Agent 也按 Windows 处理）。其他情况停止并告诉员工。
+**支持范围：** 只支持统一格式的 OCI Hub 设备包（v2、`profile=oci-hub`、`access_mode=mosh`，并带 VM 浏览器入口 `desktop_url` 与证书 pin），VM 主机名总是 `oci-hub-<员工ID>`。系统：macOS 12+、Ubuntu 22.04+/Debian 12+、Windows 10/11（在 WSL 里运行的 Agent 也按 Windows 处理）。其他情况停止并告诉员工。
 
 ## 规则
 
@@ -15,7 +15,7 @@
 3. **不收集秘密。** 设备包由员工本人在 https://cc.willfan.me/me 下载；你不代为登录，不索取验证码、密码、Cookie 或令牌。sudo 密码和 UAC 由员工在自己的终端或弹窗里输入，见 [系统授权](docs/system-authorization.md)。
 4. **私钥不出现在任何输出里。** 不打开内层设备包，不打印、上传或转发密钥，不执行包内文件；提醒员工妥善保管设备包。
 5. **不动别人的东西。** 不覆盖或复用接收目录里已有的设备文件，不停止其他 VPN；冲突先问员工。
-6. **Claude 只在 VM 里登录。** 员工在 VM 内运行 `workspace-login`，在 VM 的浏览器里完成；不在本机登录，不用本机浏览器打开授权链接。
+6. **Claude 只在 VM 里登录。** 员工在 VM 内运行 `workspace-login`，在 VM 的浏览器（本机浏览器经 VPN 打开 `desktop_url` 看到的 VM 桌面）里完成；不在本机登录，不用本机浏览器打开授权链接。
 
 ## 需要员工亲自做的
 
@@ -27,7 +27,7 @@
 | 条件：安装缺少的 Git / python3 / unzip / Homebrew | 用来下载本项目、检查和解开设备包、安装客户端；安装需要你确认或输入密码。见 [系统授权](docs/system-authorization.md#会装什么为什么)。 |
 | 条件，Windows：WSL 里输入 Linux 密码装 Mosh，或安装 MobaXterm | Windows 没有原生 Mosh 客户端。见 [Mosh 登录](docs/mosh.md#windows)。 |
 | 最后：在自己的终端运行 `mosh <员工ID>-vm` | 这是你和工作区的交互会话，只能在你自己的终端里打开。 |
-| 可选：VM 里运行 `workspace-login` 登录 Claude | Claude 账号是你自己的。VM 没有可用的浏览器入口时，先发邮件到 hello@willfan.me 请管理员开通。 |
+| 登录 Claude：VM 里运行 `workspace-login`，在本机浏览器打开 `desktop_url`（VM 桌面），核对证书指纹后在画面里的 VM 浏览器完成登录 | Claude 账号是你自己的，登录状态只留在你的 VM 里；证书指纹核对一致，才能确认打开的是你自己的 VM。 |
 
 ## 第 1 步：取得源码
 
@@ -61,7 +61,8 @@
 - **可能遇到的问题：**
   - `NEEDS_ADMIN` → 需要员工在可输入的终端或管理员窗口里授权，按 [系统授权](docs/system-authorization.md)；你的工具拒绝提权时，把整条命令交给员工自己运行。
   - `HOMEBREW_REQUIRED` → 请员工安装 Homebrew 后重跑 setup。
-  - `MANIFEST_UNSUPPORTED` → 旧版或桌面模式设备包，请员工联系管理员换发。
+  - `MANIFEST_UNSUPPORTED` → 旧版、只有终端或只有桌面的设备包，请员工联系管理员换发。
+  - `TLS_PIN_FAILED`（verify）→ VM 浏览器入口的证书与设备包不符；停止，不要打开或信任该地址，请员工联系管理员。
   - `SSH_CONFIG_UNSAFE` → 隧道已配好，但 `~/.ssh/config` 不能安全写入，登录别名不可用；请员工决定，登录改用下面的备选。
   - 其他 `code` → [故障处理](docs/troubleshooting.md)。
 
@@ -71,7 +72,16 @@
 - **macOS / Linux：** setup 已创建 `<员工ID>-vm` 别名（[如何确认](docs/mosh.md#macos--linux员工id-vm)）。请员工在自己的终端运行 `mosh <员工ID>-vm`；别名不可用时用源码目录的 `bash ./bootstrap.sh mosh`。
 - **Windows：** 隧道由原生 WireGuard 承载，PowerShell 里 `ssh <员工ID>-vm` 可用。Mosh 先检查 `wsl.exe -l -q`：有发行版用 WSL，没有就用 MobaXterm，都不行用原生 SSH，步骤见 [Mosh 登录 · Windows](docs/mosh.md#windows)。
 - **验收：** 员工登录后在 VM 里运行 `hostname`，输出 `oci-hub-<员工ID>`。
-- **最后提醒员工：** 可选的 Claude 登录只在 VM 里用 `workspace-login` 完成；不要向任何人发送密码、验证码、私钥或接入配置，不要共用设备包。
+- **最后提醒员工：** 不要向任何人发送密码、验证码、私钥或接入配置，不要共用设备包。
+
+## 第 5 步：在 VM 浏览器里登录 Claude
+
+- **需求：** 员工在 `mosh <员工ID>-vm` 会话里运行 `workspace-login`，它在 VM 里启动图形 Firefox；员工在**本机**浏览器打开 verify 输出的 `desktop_url`（形如 `https://10.234.0.3:8443/`，只能经 VPN 访问），在画面里的 VM Firefox 完成 Claude 登录；页面给出授权码时回 mosh 终端粘贴。
+- **画面后端：** `desktop_url` 背后是 noVNC + Firefox（尚未升级的 VM），或 KasmVNC 桌面（已升级和新开户的 VM）。两者流程相同，也都不要求输入 VNC 或网页密码（只靠 VPN 和证书 pin 保护）；出现密码框就停止并联系管理员。
+- **为什么：** Claude 登录必须在 VM 里完成，账号凭据不落到本机；该地址只在 VPN 内可达，证书是这台 VM 自签的，浏览器会提示"不安全"，只有指纹一致才说明连到的是员工自己的 VM。
+- **证书（原样核对）：** 只有 verify 输出 `desktop_tls=passed` 才继续。浏览器提示证书不受信任时，请员工查看证书的 SHA-256 指纹，与 JSON 中的 `desktop_tls_sha256` 逐位比对（忽略冒号和大小写），一致才接受；不一致或 verify 不是 `passed` 就停止并联系管理员，不要点"继续访问"。
+- **验收：** 员工再运行一次 verify，结果 `CONNECTION_VERIFIED`（`claude_auth=passed`）。
+- **可能遇到的问题：** 页面打不开 → VPN 未连接，重跑 setup；画面空白或提示桌面未启动 → 先在 mosh 里运行 `workspace-login`，再刷新；不要在本机浏览器直接打开 Claude 授权链接。
 
 ## 资料目录
 
@@ -79,7 +89,7 @@
 | --- | --- |
 | [docs/download.md](docs/download.md) | 两层 ZIP 的结构、检查规则、Windows 检查与解开、`/d/<令牌>` 备用下载 |
 | [docs/system-authorization.md](docs/system-authorization.md) | sudo、UAC、macOS 授权；会装哪些软件、为什么 |
-| [docs/verification.md](docs/verification.md) | check/setup/verify 的结果码与验收字段 |
+| [docs/verification.md](docs/verification.md) | check/setup/verify 的结果码与验收字段（含 `desktop_tls`） |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | 任何非成功的 `code` |
 | [docs/mosh.md](docs/mosh.md) | 别名细节；Windows 的 WSL、MobaXterm、原生 SSH |
 | [docs/administrator.md](docs/administrator.md) | 管理员侧的设备包格式与交付约定 |

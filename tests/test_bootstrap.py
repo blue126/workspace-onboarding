@@ -14,6 +14,11 @@ import unittest
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def tunnel_for(device):
+    # The administrator derives the tunnel name from the device; the bootstrap checks it.
+    return "wh-" + hashlib.sha256(("oci-hub:" + device).encode()).hexdigest()[:8]
 WINDOWS = os.name == "nt"
 
 class Bootstrap(unittest.TestCase):
@@ -40,12 +45,14 @@ class Bootstrap(unittest.TestCase):
         self.state = self.path / "private state"
         self.package = self.path / "fixture.zip"
         self.manifest = {
-            # Only terminal-mode OCI Hub bundles are supported.
+            # Only the unified OCI Hub bundle is supported: Mosh terminal and VM browser entry.
             "schema_version": 2, "tool_version": "2.0.0", "device_id": "ed-fixture-test",
             "vm_hostname": "oci-hub-fixture", "ssh_gateway": "10.77.0.1",
             "wireguard_address": "10.77.0.2/32", "wireguard_endpoint": "203.0.113.10",
-            "tunnel_name": "wh-1234abcd", "profile": "oci-hub", "ssh_user": "employee",
-            "ssh_alias": "oci-hub-ed-fixture-test", "access_mode": "mosh", "mosh_ports": "60030:60039",
+            "tunnel_name": tunnel_for("ed-fixture-test"), "profile": "oci-hub", "ssh_user": "employee",
+            "ssh_alias": "oci-hub-ed-fixture-test", "access_mode": "mosh", "mosh_ports": "60000:61000",
+            # The openssl stub presents b"synthetic DER" as the VM browser certificate.
+            "desktop_url": "https://10.77.0.1:8443/", "tls_certificate_sha256": hashlib.sha256(b"synthetic DER").hexdigest(),
             "wireguard_public_key": base64.b64encode(b"a"*32).decode(),
             "client_wireguard_public_key": base64.b64encode(b"b"*32).decode(),
         }
@@ -326,7 +333,7 @@ elif name=="ip":
         self.call("setup", code="PACKAGE_TOO_LARGE" if not WINDOWS else "PACKAGE_UNSAFE")
 
     def test_email_username_device_id_needs_no_prefix(self):
-        self.manifest.update(device_id='zhang171903992',ssh_alias='oci-hub-zhang171903992')
+        self.manifest.update(device_id='zhang171903992',ssh_alias='oci-hub-zhang171903992',tunnel_name=tunnel_for('zhang171903992'))
         self.data['manifest.json']=json.dumps(self.manifest).encode()
         self.bundle()
         self.setup()
@@ -521,17 +528,17 @@ elif name=="ip":
 
     def hub_manifest(self):
         # The default fixture is already the only supported kind; rebuild after edits.
-        self.manifest.update(ssh_alias='oci-hub-'+self.manifest['device_id'])
+        self.manifest.update(ssh_alias='oci-hub-'+self.manifest['device_id'],tunnel_name=tunnel_for(self.manifest['device_id']))
         self.data['manifest.json']=json.dumps(self.manifest).encode()
         self.bundle()
         if not WINDOWS:self.stubs()
 
-    def test_retired_v1_and_desktop_bundles_are_unsupported(self):
-        v1={k:v for k,v in self.manifest.items() if k not in ('profile','ssh_user','ssh_alias','access_mode','mosh_ports')}
+    def test_retired_v1_terminal_only_and_desktop_only_bundles_are_unsupported(self):
+        v1={k:v for k,v in self.manifest.items() if k not in ('profile','ssh_user','ssh_alias','access_mode','mosh_ports','desktop_url','tls_certificate_sha256')}
         v1.update(schema_version=1,tool_version='1.0.0',tunnel_name='ws-1234abcd',vm_hostname='employee-fixture')
         desktop={k:v for k,v in self.manifest.items() if k not in ('access_mode','mosh_ports')}
-        desktop.update(desktop_url='https://10.77.0.1:8443/',tls_certificate_sha256='a'*64)
-        for manifest in (v1,desktop,dict(self.manifest,access_mode='desktop')):
+        terminal={k:v for k,v in self.manifest.items() if k not in ('desktop_url','tls_certificate_sha256')}
+        for manifest in (v1,desktop,terminal,dict(self.manifest,access_mode='desktop')):
             self.data['manifest.json']=json.dumps(manifest).encode();self.bundle()
             run,_=self.call('setup',code='MANIFEST_UNSUPPORTED')
             self.assertIn('README',run.stderr)
@@ -568,7 +575,7 @@ elif name=="ip":
             import jsonschema
         except ImportError:
             self.skipTest('jsonschema unavailable; do not install dependencies automatically')
-        self.hub_manifest();self.manifest.update(device_id='alice',ssh_alias='oci-hub-alice')
+        self.hub_manifest();self.manifest.update(device_id='alice',ssh_alias='oci-hub-alice',tunnel_name=tunnel_for('alice'))
         schema=json.loads((ROOT/'schemas/bundle-manifest.schema.json').read_text())
         jsonschema.validate(self.manifest,schema)
         for name in ('bundle-manifest.oci-hub-mosh.example.json',):
@@ -582,21 +589,32 @@ elif name=="ip":
     def mosh_manifest(self):
         self.hub_manifest()
 
-    def test_terminal_mosh_ports_and_extra_desktop_fields_rejected(self):
-        self.mosh_manifest()
-        for ports in ('59999:60000','60039:60030','60030:61001','60030:60039;id'):
-            self.manifest['mosh_ports']=ports;self.data['manifest.json']=json.dumps(self.manifest).encode();self.bundle()
+    def test_invalid_mosh_ports_and_vm_browser_identity_rejected(self):
+        self.mosh_manifest();good=dict(self.manifest)
+        changes=[dict(mosh_ports=p) for p in ('59999:60000','60039:60030','60030:61001','60030:60039;id','60030:60039','60000:60999')]
+        # The tunnel name is derived from the device, not just shaped like one.
+        changes+=[dict(tunnel_name='wh-1234abcd'),dict(tunnel_name=tunnel_for('someone-else'))]
+        # The VM browser entry is this VM's overlay on 8443 with a lowercase SHA256 pin.
+        changes+=[dict(desktop_url='https://10.77.0.9:8443/'),dict(desktop_url='http://10.77.0.1:8443/'),dict(desktop_url='https://10.77.0.1:443/'),
+                  dict(tls_certificate_sha256='A'*64),dict(tls_certificate_sha256='a'*63),dict(viewer_url='https://10.77.0.1:8443/')]
+        for change in changes:
+            self.manifest=dict(good,**change);self.data['manifest.json']=json.dumps(self.manifest).encode();self.bundle()
             self.call('check',code='MANIFEST_INVALID')
-        self.manifest['mosh_ports']='60030:60039';self.manifest['desktop_url']='https://10.77.0.1:8443/'
-        self.data['manifest.json']=json.dumps(self.manifest).encode();self.bundle()
-        self.call('check',code='MANIFEST_INVALID')
 
-    @unittest.skipIf(WINDOWS,'Native SSH verification fixture uses Unix command stubs')
-    def test_terminal_verify_does_not_require_desktop_tls(self):
-        self.mosh_manifest();self.call('setup',code='CONFIGURED')
-        self.call('verify',code='CONNECTION_VERIFIED')
+    @unittest.skipIf(WINDOWS,'TLS fixture uses Unix openssl stub; Windows needs a synthetic TLS server')
+    def test_verify_checks_the_vm_browser_tls_pin_before_ssh(self):
+        self.mosh_manifest();_,report=self.call('setup',code='CONFIGURED')
+        self.assertEqual((report['desktop_url'],report['desktop_tls_sha256'],report['desktop_tls']),('https://10.77.0.1:8443/',self.manifest['tls_certificate_sha256'],'pending'))
+        _,report=self.call('verify',code='CONNECTION_VERIFIED');self.assertEqual(report['desktop_tls'],'passed')
+        commands=[json.loads(line) for line in (self.path/'commands.jsonl').read_text().splitlines()]
+        self.assertIn(['openssl',['s_client','-connect','10.77.0.1:8443','-servername','10.77.0.1']],commands)
+        # A different certificate stops before the SSH session and is never reported as passed.
+        self.manifest['tls_certificate_sha256']='b'*64;self.data['manifest.json']=json.dumps(self.manifest).encode();self.bundle();self.stubs()
+        self.state=self.path/'second state';self.call('setup',code='CONFIGURED')
+        (self.path/'commands.jsonl').unlink()
+        _,report=self.call('verify',code='TLS_PIN_FAILED');self.assertEqual(report['desktop_tls'],'failed')
         commands=[json.loads(line)[0] for line in (self.path/'commands.jsonl').read_text().splitlines()]
-        self.assertNotIn('openssl',commands)
+        self.assertNotIn('ssh',commands)
 
     def test_terminal_mosh_needs_interactive_terminal_or_wsl(self):
         self.mosh_manifest();self.setup()
@@ -792,7 +810,7 @@ elif name=="ip":
 
     @unittest.skipIf(WINDOWS,'Unix ssh_config Include')
     def test_alias_follows_vm_hostname_not_device_id(self):
-        self.manifest.update(device_id='laptop-2',ssh_alias='oci-hub-laptop-2',vm_hostname='oci-hub-'+'a'*20)
+        self.manifest.update(device_id='laptop-2',ssh_alias='oci-hub-laptop-2',tunnel_name=tunnel_for('laptop-2'),vm_hostname='oci-hub-'+'a'*20)
         self.data['manifest.json']=json.dumps(self.manifest).encode();self.bundle();self.stubs()
         self.setup()
         self.assertEqual((self.native_state()/'ssh_config').read_text().splitlines()[0],'Host oci-hub-laptop-2 '+'a'*20+'-vm')
@@ -803,9 +821,10 @@ elif name=="ip":
         if not WINDOWS:self.stubs()
         _,report=self.setup()
         self.assertEqual((report['device_id'],report['vm_hostname']),(self.manifest['device_id'],'oci-hub-fixture'))
+        self.assertEqual((report['desktop_url'],report['desktop_tls_sha256']),(self.manifest['desktop_url'],self.manifest['tls_certificate_sha256']))
         self.package.write_bytes(b'not a zip')
         _,report=self.call('check',code='PACKAGE_HASH_MISMATCH')
-        self.assertNotIn('device_id',report)
+        self.assertNotIn('device_id',report);self.assertNotIn('desktop_url',report)
 
     @unittest.skipUnless(WINDOWS,'Windows ssh_config Include')
     def test_windows_alias_and_include_in_user_profile(self):
@@ -827,7 +846,7 @@ elif name=="ip":
 
     @unittest.skipUnless(WINDOWS,'Windows ssh_config alias')
     def test_windows_alias_follows_vm_hostname_not_device_id(self):
-        self.manifest.update(device_id='laptop-2',ssh_alias='oci-hub-laptop-2',vm_hostname='oci-hub-'+'a'*20)
+        self.manifest.update(device_id='laptop-2',ssh_alias='oci-hub-laptop-2',tunnel_name=tunnel_for('laptop-2'),vm_hostname='oci-hub-'+'a'*20)
         self.data['manifest.json']=json.dumps(self.manifest).encode();self.bundle()
         _,report=self.setup()
         self.assertEqual((report['device_id'],report['vm_hostname']),('laptop-2','oci-hub-'+'a'*20))

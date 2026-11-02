@@ -6,7 +6,8 @@
 | --- | --- |
 | PACKAGE_MISSING / PACKAGE_HASH_MISMATCH | 项目不完整或数据包被改变；从获授权仓库取得同一发布版本，联系管理员；不要自行改 hash |
 | PACKAGE_UNSAFE / MANIFEST_INVALID | 包结构、字段或版本不符合约定；由管理员重新生成，不能运行包内脚本 |
-| MANIFEST_UNSUPPORTED | 旧版 v1 或桌面模式设备包，已停用；只支持终端模式的 OCI Hub 设备包。请员工联系管理员换发新包，不要修改 manifest |
+| MANIFEST_UNSUPPORTED | 旧版 v1、只有终端或只有桌面的设备包，已停用；只支持统一格式（终端 + VM 浏览器入口）的 OCI Hub 设备包。请员工联系管理员换发新包，不要修改 manifest |
+| TLS_PIN_FAILED | VM 浏览器入口（`desktop_url`）的证书与设备包 pin 不符或无法握手；不要打开或信任该地址，不要点浏览器的"继续访问"。确认 VPN 已连接后仍失败则停止，联系管理员 |
 | DEPENDENCY_MISSING | 缺本机客户端；获准后 setup 加 InstallClients／install-clients |
 | NEEDS_ADMIN | 尚未取得系统授权，可能缺少交互输入、授权取消或 sudo 被拒绝；不是单指密码未输入。按[系统授权](system-authorization.md)处理，工具明确拒绝时由本人运行 Agent 给出的 setup→verify 命令；不依赖另一终端 sudo -v，不发送密码 |
 | HOMEBREW_REQUIRED | Agent 按 [Homebrew 官方指引](https://brew.sh/) 安装 Homebrew 后重跑 setup --install-clients，系统授权交还本人 |
@@ -24,7 +25,7 @@
 | VERIFY_TIMEOUT | SSH 60秒或 SFTP 30秒未结束，停止反馈，不反复验证或延长超时 |
 | CLAUDE_AUTH_CHECK_FAILED | Claude 状态命令超时或返回无效结果，不等同未登录；停止交管理员处理 |
 | SFTP_ROUNDTRIP_FAILED / SFTP_CONTENT_MISMATCH | 只创建本次随机 /tmp/ws-onboarding-* 目录；失败时不删除未经核实内容，管理员可按本次 nonce 核查 |
-| CLAUDE_AUTH_USER_PENDING | 连接已验证，个人授权待完成；进入 VM 运行 workspace-login，由本人在 VM 浏览器中操作；VM 没有可达的浏览器入口时先发邮件联系管理员开通 |
+| CLAUDE_AUTH_USER_PENDING | 连接和 VM 浏览器证书已验证，个人授权待完成；按 [README 第 5 步](../README.md#第-5-步在-vm-浏览器里登录-claude)：VM 里运行 workspace-login，本机浏览器打开 `desktop_url`，指纹一致后在画面里的 VM 浏览器中完成 |
 | MOSH_CLIENT_MISSING / INTERACTIVE_TERMINAL_REQUIRED / MOSH_WSL_REQUIRED | 见 [Mosh 登录](mosh.md) |
 | HANDSHAKE_INSPECTION_UNAVAILABLE | SSH/SFTP 等按报告判断，先核对 CLI 客户端和本人 sudo/UAC 授权；不要把 unavailable 写成 passed |
 | OPERATION_FAILED | Windows 已抑制可能含私密信息的原始异常；报告步骤、版本和此代码，别贴私钥或完整配置 |

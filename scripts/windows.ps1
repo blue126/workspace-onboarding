@@ -10,7 +10,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $repoDir=Split-Path $PSScriptRoot -Parent
-$result=[ordered]@{schema_version=1;platform='windows';code='STARTING';package_verified=$false;client_ready=$false;tunnel_handshake='unavailable';ssh_identity='pending';assigned_vm='pending';sudo='pending';cli='pending';sftp_roundtrip='pending';claude_auth='user_action_required';real_task='pending'}
+$result=[ordered]@{schema_version=1;platform='windows';code='STARTING';package_verified=$false;client_ready=$false;tunnel_handshake='unavailable';ssh_identity='pending';assigned_vm='pending';sudo='pending';cli='pending';sftp_roundtrip='pending';claude_auth='user_action_required';desktop_tls='pending';real_task='pending'}
 $stage=$null
 $vmAlias=''
 $sshConfigLegacy=$false
@@ -233,17 +233,18 @@ try {
         }
     } finally { $zip.Dispose() }
     $manifest=Get-Content -LiteralPath (Join-Path $stage 'manifest.json') -Raw | ConvertFrom-Json
-    # Only terminal-mode OCI Hub bundles are supported; v1 and desktop bundles are retired.
-    $unsupported='Only terminal-mode OCI Hub bundles (v2, profile=oci-hub, access_mode=mosh) are supported; ask the administrator for a new bundle, see README.'
+    # Only the unified OCI Hub bundle is supported: the Mosh terminal and the VM browser
+    # entry together. v1, terminal-only and desktop-only bundles are retired.
+    $unsupported='Only unified OCI Hub bundles (v2, profile=oci-hub, access_mode=mosh, with the VM browser desktop_url and TLS pin) are supported; ask the administrator for a new bundle, see README.'
     $props=$manifest.PSObject.Properties
     if(!$props['schema_version'] -or !$props['tool_version'] -or $manifest.schema_version -ne 2 -or $manifest.tool_version -cne '2.0.0' -or
-       !$props['profile'] -or $manifest.profile -cne 'oci-hub' -or !$props['access_mode'] -or $manifest.access_mode -cne 'mosh') { Stop-Setup 'MANIFEST_UNSUPPORTED' $unsupported }
-    $extraFields=@('profile','ssh_user','ssh_alias','access_mode','mosh_ports')
+       !$props['profile'] -or $manifest.profile -cne 'oci-hub' -or !$props['access_mode'] -or $manifest.access_mode -cne 'mosh' -or
+       !$props['desktop_url'] -or !$props['tls_certificate_sha256']) { Stop-Setup 'MANIFEST_UNSUPPORTED' $unsupported }
+    $extraFields=@('profile','ssh_user','ssh_alias','access_mode','mosh_ports','desktop_url','tls_certificate_sha256')
     foreach($field in $extraFields) { if(!$props[$field]) { Stop-Setup 'MANIFEST_INVALID' 'Missing native SSH field.' } }
     if($manifest.ssh_user -cne 'employee' -or $manifest.ssh_alias -cne ('oci-hub-'+$manifest.device_id)) { Stop-Setup 'MANIFEST_INVALID' 'Invalid native SSH profile.' }
-    if($manifest.mosh_ports -cnotmatch '^(6[01][0-9]{3}):(6[01][0-9]{3})$') { Stop-Setup 'MANIFEST_INVALID' 'Invalid Mosh ports.' }
-    $ports=$manifest.mosh_ports.Split(':')
-    if([int]$ports[0] -gt [int]$ports[1] -or [int]$ports[1] -gt 61000) { Stop-Setup 'MANIFEST_INVALID' 'Invalid Mosh range.' }
+    # The VM runs a native mosh-server on its default UDP range; the bundle claims exactly that.
+    if($manifest.mosh_ports -cne '60000:61000') { Stop-Setup 'MANIFEST_INVALID' 'Invalid Mosh ports.' }
     # Employee IDs are at most 20 characters, as on the administrator side.
     $vmPattern='^oci-hub-[a-z][a-z0-9-]{0,19}$'
     $profileName='oci-hub'; $sshUser='employee'; $sshAlias=$manifest.ssh_alias; $wgPort=51824; $wgKeepalive=15
@@ -258,6 +259,13 @@ try {
        !(Valid-Ip $manifest.ssh_gateway) -or !(Valid-Ip $manifest.wireguard_endpoint) -or
        !(Valid-Ip ($manifest.wireguard_address -replace '/32$','')) -or
        ($manifest.wireguard_address -replace '/32$','') -ceq $manifest.ssh_gateway) { Stop-Setup 'MANIFEST_INVALID' 'Invalid device identity or IPv4 addressing.' }
+    # The tunnel name is derived from the device, exactly as the administrator side derives it.
+    $tunnelAlgorithm=[Security.Cryptography.SHA256]::Create()
+    try { $tunnelDigest=[BitConverter]::ToString($tunnelAlgorithm.ComputeHash([Text.Encoding]::UTF8.GetBytes('oci-hub:'+[string]$manifest.device_id))).Replace('-','').ToLowerInvariant() }
+    finally { $tunnelAlgorithm.Dispose() }
+    if($manifest.tunnel_name -cne ('wh-'+$tunnelDigest.Substring(0,8))) { Stop-Setup 'MANIFEST_INVALID' 'Tunnel name does not match the device.' }
+    # The VM browser entry is this VM's overlay HTTPS; verify checks its certificate pin.
+    if($manifest.desktop_url -cne ('https://'+$manifest.ssh_gateway+':8443/') -or $manifest.tls_certificate_sha256 -cnotmatch '^[a-f0-9]{64}$') { Stop-Setup 'MANIFEST_INVALID' 'Invalid VM browser identity.' }
     foreach($keyValue in @($manifest.wireguard_public_key,$manifest.client_wireguard_public_key)) {
         if($keyValue -cnotmatch '^[A-Za-z0-9+/]{43}=$' -or [Convert]::FromBase64String($keyValue).Length -ne 32) { Stop-Setup 'KEY_INVALID' 'Invalid WireGuard public key.' }
     }
@@ -271,6 +279,7 @@ try {
     $result.package_verified=$true
     # Non-secret identity for the agent's handover; validated above.
     $result.device_id=[string]$manifest.device_id; $result.vm_hostname=[string]$manifest.vm_hostname
+    $result.desktop_url=[string]$manifest.desktop_url; $result.desktop_tls_sha256=[string]$manifest.tls_certificate_sha256
     # Login alias <employee-id>-vm, mirroring unix.sh.
     $vmAlias=$manifest.vm_hostname.Substring(8)+'-vm'
     if(!$StateRoot) { $StateRoot=Join-Path $env:USERPROFILE 'EmployeeWorkspace\devices' }
@@ -382,6 +391,26 @@ $hostLine
             if(!(Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'WireGuard/wg.exe'))) { Stop-Setup 'DEPENDENCY_MISSING' 'WireGuard CLI is missing.' }
             $nonce=[Guid]::NewGuid().ToString('N')
             $prefix='WS_'+$nonce
+            # The VM browser entry must present exactly the pinned certificate before the
+            # employee is told to open it; the browser's own warning is not a check.
+            $result.desktop_tls='failed'
+            $tcp=New-Object Net.Sockets.TcpClient
+            try {
+                $task=$tcp.ConnectAsync($manifest.ssh_gateway,8443)
+                if(!$task.Wait(15000)) { throw 'VM browser TLS timeout.' }
+                $expectedPin=$manifest.tls_certificate_sha256
+                $callback=[Net.Security.RemoteCertificateValidationCallback]{ param($sender,$certificate,$chain,$errors)
+                    $algorithm=[Security.Cryptography.SHA256]::Create()
+                    try { return [BitConverter]::ToString($algorithm.ComputeHash($certificate.GetRawCertData())).Replace('-','').ToLowerInvariant() -ceq $expectedPin }
+                    finally { $algorithm.Dispose() }
+                }
+                $tls=New-Object Net.Security.SslStream($tcp.GetStream(),$false,$callback)
+                $tls.ReadTimeout=15000; $tls.WriteTimeout=15000
+                $tls.AuthenticateAsClient($manifest.ssh_gateway)
+                $tls.Dispose()
+            } catch { Stop-Setup 'TLS_PIN_FAILED' 'VM browser TLS identity verification failed; do not open or accept it.' }
+            finally { $tcp.Dispose() }
+            $result.desktop_tls='passed'
             $source=[IO.File]::ReadAllText((Join-Path $PSScriptRoot 'verify-session.py')).Replace('__PREFIX__',$prefix).Replace('__VM__',$manifest.vm_hostname)
             $payload=[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($source))
             if($payload.Length -ge 3500) { Stop-Setup 'SSH_PROTOCOL_FAILED' 'Verification payload exceeds the PTY line limit.' }
