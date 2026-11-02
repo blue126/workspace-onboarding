@@ -812,8 +812,8 @@ elif name=="ip":
         self.hub_manifest();self.setup()
         config=(self.native_state()/'ssh_config').read_text()
         self.assertEqual(config.splitlines()[0],'Host oci-hub-'+self.manifest['device_id']+' fixture-vm')
-        # Same spelling as the script: GetFullPath, no symlink or short-name expansion.
-        include='Include "'+os.path.abspath(str(self.native_state())).replace('\\','/')+'/ssh_config"'
+        # The script writes the long path; the runner's TEMP may be an 8.3 short name.
+        include='Include "'+os.path.realpath(str(self.native_state())).replace('\\','/')+'/ssh_config"'
         self.assertEqual(self.user_config().read_text().splitlines(),[include])
         self.user_config().write_bytes(('Host other\n    User someone\n'+include+'\n').encode())
         self.setup()
@@ -882,7 +882,7 @@ class OuterZipCheck(unittest.TestCase):
 
     def test_readme_runs_this_exact_command(self):
         command='python3 -I scripts/check-outer-zip.py "<外层ZIP>" "$HOME/Downloads/employee-workspace"'
-        for doc in ("README.md","docs/download.md"):self.assertIn(command,(ROOT/doc).read_text())
+        for doc in ("README.md","docs/download.md"):self.assertIn(command,(ROOT/doc).read_text(encoding="utf-8"))
 
     def test_administrator_and_regular_entries_are_ready(self):
         self.assertEqual(self.check(self.outer()),"READY")
