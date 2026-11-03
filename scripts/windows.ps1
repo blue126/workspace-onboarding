@@ -372,7 +372,7 @@ $hostLine
     $installedFiles=@('client-key','known_hosts','manifest.json','wg.key','ssh_config',($manifest.tunnel_name+'.conf'),'bundle.sha256')
     switch($Action) {
         'check' {
-            if(Test-Reissued) { if(!$result.client_ready) { Report 'DEPENDENCY_MISSING'; exit 3 }; Report 'REISSUE_READY'; exit 0 }
+            if(Test-Reissued) { Report 'REISSUE_READY'; exit 0 }
             if(Test-Path -LiteralPath $state) { Require-Installed }
             if(!$result.client_ready) { Report 'DEPENDENCY_MISSING'; exit 3 }
             Report 'CHECKED'
