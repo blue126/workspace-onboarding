@@ -1,38 +1,12 @@
 # 设备包下载
 
-## 首选：员工在「我的工作区」下载
+## 员工在「我的工作区」下载
 
-员工打开 https://cc.willfan.me/me ，用申请时的邮箱和收到的验证码登录，在「设备接入包」卡片点击「下载设备接入包」。登录验证码只发到员工本人邮箱，设备包含员工专属私钥，所以由员工本人经 HTTPS 下载。卡片显示有效期和剩余下载次数；有效期和次数以页面为准（目前为 3 天、最多 3 次），用完或过期后失效，需要发邮件到 hello@willfan.me 请管理员重新发送。
+员工打开 https://cc.willfan.me/me ，用申请时的邮箱和收到的验证码登录，在「设备接入包」卡片点击「下载设备接入包」。登录验证码只发到员工本人邮箱，设备包含员工专属私钥，所以由员工本人经 HTTPS 下载。登录后可随时重新下载，不限次数；设备包保留到这台设备退役或被新包替换。页面显示「暂无可下载的设备包」时，需要发邮件到 hello@willfan.me 请管理员重新发送。设备包只在这里下载，邮件不带下载链接。
 
 Agent 不代为登录，不索取验证码、Cookie 或令牌。下载完成后，Agent 自己在浏览器默认下载目录（macOS/Linux `~/Downloads`，Windows `%USERPROFILE%\Downloads`）找最近一天内修改的 `device-bundle*.zip`；没有或有多个时才问员工。下载的文件通常名为 `device-bundle.zip`（可能带 `(1)` 等后缀），它是外层 ZIP，里面还有同名的内层 `device-bundle.zip`。
 
-## 备用：用 `/d/<令牌>` 链接下载
-
-只在员工无法登录网站、但手上有管理员给的 `https://cc.willfan.me/d/<令牌>` 链接时使用。每次下载都要一个发到员工邮箱的 6 位验证码（10 分钟内有效），与页面共用同一下载次数。
-
-**这一步由员工本人在自己的终端里完成**：Agent 把下面的命令模板交给员工，并说明“验证码只发到你的邮箱，由你自己输入，不要告诉我”；Agent 不接收、不填写验证码，也不代为运行。员工把 `实际下载链接` 换成自己的链接后运行；下载的文件名以 `device-bundle` 开头，README 第 2 步能找到它。
-
-macOS / Linux（在 `~/Downloads` 内运行）：
-
-```bash
-link='实际下载链接'
-curl --fail --show-error --max-time 45 -X POST "$link/code"
-printf '邮箱里的 6 位验证码: '; read -r code
-curl --fail --show-error --max-time 45 -X POST -d "code=$code" "$link" -o "device-bundle-$(date +%Y%m%d%H%M%S).zip"
-```
-
-Windows PowerShell（在 `%USERPROFILE%\Downloads` 内运行；用系统 curl.exe，避免 PowerShell 的 curl 别名）：
-
-```powershell
-$link='实际下载链接'
-curl.exe --fail --show-error --max-time 45 -X POST "$link/code"
-$code=Read-Host '邮箱里的 6 位验证码'
-curl.exe --fail --show-error --max-time 45 -X POST -d "code=$code" "$link" -o "device-bundle-$(Get-Date -Format yyyyMMddHHmmss).zip"
-```
-
-预期：两条 curl 退出码都为 0，第二条得到 ZIP。验证码错误（403）时员工重新获取后再运行；链接失效（410）时停止并联系管理员重新发送，不反复重试。GET 返回的是网页，不能当作 ZIP。员工完成后告诉 Agent 即可，Agent 继续 README 第 2 步。
-
-## 校验与解开（两种方式相同）
+## 校验与解开
 
 **两层 ZIP，名字相同：** 员工下载的 `device-bundle*.zip` 是外层 ZIP，里面恰好三个文件：`device-bundle.zip`（内层设备包，含 manifest 与密钥）、`device-bundle.sha256`、`README.md`（本设备连接单）。完整性校验在内层：bootstrap 的 check/setup 用 device-bundle.sha256 核对内层包，不一致返回 `PACKAGE_HASH_MISMATCH`；Agent 不另算摘要，也不打开内层包。页面上显示的 SHA256 可供员工自行核对，不是必需步骤。
 
