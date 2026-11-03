@@ -380,7 +380,8 @@ elif name=="ip":
         self.assertEqual(len(archives),1)
         self.assertEqual(old,{q.name:q.read_bytes() for q in archives[0].iterdir()})
         self.assertIn(json.dumps(self.manifest).encode(),(self.native_state()/"manifest.json").read_bytes())
-        self.call("check",code="CHECKED")
+        # CI Windows has no WireGuard; the reissue state is resolved either way.
+        self.call("check",code="DEPENDENCY_MISSING" if WINDOWS else "CHECKED")
 
     @unittest.skipIf(WINDOWS, "Unix CLI route/tunnel behavior")
     def test_reissue_stops_only_the_previous_tunnel_of_this_device(self):
