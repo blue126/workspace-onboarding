@@ -43,7 +43,7 @@
 - **可能遇到的问题：**
   - 外层 ZIP 和内层包同名 `device-bundle.zip`：外层留在下载目录，别放进接收目录。
   - 找不到或找到多个 → 问员工是哪个文件；macOS 无权读“下载”文件夹 → 请员工在隐私弹窗中允许。
-  - `STOP: already in …` → 不要解开；说明“新旧设备文件混在一起会让脚本用错身份”，请员工同意后移到备份目录。其他 `STOP` → 停止，请员工联系管理员。
+  - `STOP: already in …` → 上一次的设备文件还在接收目录。告诉员工后按 [移走上一次的设备文件](docs/download.md#校验与解开两种方式相同) 移到 `_archive-<时间>/`，再重新检查；不覆盖、不删除。其他 `STOP` → 停止，请员工联系管理员。
   - 员工登录不了网站但有 `/d/<令牌>` 链接 → 由员工本人按 [备用下载](docs/download.md#备用用-d令牌-链接下载) 操作。
 
 ## 第 3 步：check → setup → verify
@@ -56,7 +56,7 @@
 | 安装配置 | `bash ./bootstrap.sh setup --install-clients` | `powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 setup -InstallClients` |
 | 验证 | `bash ./bootstrap.sh verify` | `powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 verify` |
 
-- **验收：** check → `CHECKED`（新电脑上 `DEPENDENCY_MISSING` 属正常，继续 setup）；setup → `CONFIGURED`；verify → `CLAUDE_AUTH_USER_PENDING`（连接已通过，Claude 待登录）或 `CONNECTION_VERIFIED`。结果码含义见 [标准验证](docs/verification.md)。
+- **验收：** check → `CHECKED`（新电脑上 `DEPENDENCY_MISSING` 属正常，继续 setup；`REISSUE_READY` 表示本机装过这台设备的旧包，setup 会自动停掉旧隧道、把旧配置归档到 `devices/oci-hub/.archive/`，继续即可）；setup → `CONFIGURED`；verify → `CLAUDE_AUTH_USER_PENDING`（连接已通过，Claude 待登录）或 `CONNECTION_VERIFIED`。结果码含义见 [标准验证](docs/verification.md)。
 - **Windows 管理员窗口（原样）：** `Start-Process powershell -Verb RunAs -ArgumentList '-NoExit','-ExecutionPolicy','Bypass','-Command',"Set-Location '$env:USERPROFILE\EmployeeWorkspace\onboarding'"`
 - **可能遇到的问题：**
   - `NEEDS_ADMIN` → 需要员工在可输入的终端或管理员窗口里授权，按 [系统授权](docs/system-authorization.md)；你的工具拒绝提权时，把整条命令交给员工自己运行。

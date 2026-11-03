@@ -12,7 +12,9 @@
 | NEEDS_ADMIN | 尚未取得系统授权，可能缺少交互输入、授权取消或 sudo 被拒绝；不是单指密码未输入。按[系统授权](system-authorization.md)处理，工具明确拒绝时由本人运行 Agent 给出的 setup→verify 命令；不依赖另一终端 sudo -v，不发送密码 |
 | HOMEBREW_REQUIRED | Agent 按 [Homebrew 官方指引](https://brew.sh/) 安装 Homebrew 后重跑 setup --install-clients，系统授权交还本人 |
 | ROUTE_INSPECTION_FAILED / TUNNEL_INSPECTION_FAILED | 无法检查当前路由或 CLI 接口，未修改网络；报告此代码，不盲目启停 |
-| STATE_ROOT_CONFLICT / CONFIG_CONFLICT | 现有目录／配置归属或内容不匹配；保留原文件，联系管理员，不覆盖 |
+| REISSUE_READY | 本机装过同一设备的旧包（管理员换发）。运行 setup：它在本人授权下停掉旧包的隧道，把旧配置移到 `.archive/<设备>-<时间>/`，再装新包；不删除任何文件 |
+| STATE_ROOT_CONFLICT / CONFIG_CONFLICT | 现有目录／配置归属或内容不匹配（例如同一个包装好后又被改过）；保留原文件，联系管理员，不覆盖 |
+| CONFIG_REPLACE_FAILED | 换发时旧配置没能归档；什么都没替换，报告此代码给管理员 |
 | CONFIG_UPGRADE_FAILED | 无法把 1.0.0 的本设备 ssh_config 原地升级（多为状态目录不可写或磁盘已满）；原文件保留，旧命令照常可用。核对状态目录归属和权限后重跑 setup，不手工改写 ssh_config |
 | SSH_CONFIG_UNSAFE | `~/.ssh` 不是可写目录，或 `~/.ssh/config` 是符号链接、硬链接、特殊文件或不可写；隧道与本设备配置已完成，`~/.ssh` 未被改动。由本人决定是否改为普通可写文件后重跑 setup，或继续用 `bootstrap.sh connect`/`mosh`；Agent 不替本人改动该文件 |
 | SSH_CONFIG_WRITE_FAILED | 检查通过但写入 `~/.ssh/config` 失败（如磁盘已满）；原文件保留。排除原因后重跑 setup，期间用 `bootstrap.sh connect`/`mosh` |

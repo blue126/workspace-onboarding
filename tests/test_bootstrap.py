@@ -244,7 +244,7 @@ elif name=="wg":
  if args==["--version"]:print("wireguard-tools fixture")
  elif args==["show","interfaces"]:
   print(("utun9" if sys.platform=="darwin" else m["tunnel_name"]) if (p/"tunnel-active").exists() else "")
- elif args[-1]=="public-key":print("wrong" if os.environ.get("WRONG_TUNNEL") else m["client_wireguard_public_key"])
+ elif args[-1]=="public-key":print("wrong" if os.environ.get("WRONG_TUNNEL") else ((p/"tunnel-active").read_text().strip() or m["client_wireguard_public_key"]))
  elif args[-1]=="peers":print(m["wireguard_public_key"])
  elif args[-1]=="allowed-ips":print(m["wireguard_public_key"]+"\t"+m["ssh_gateway"]+"/32")
  elif args[-1]=="latest-handshakes":print(m["wireguard_public_key"]+"\t"+str(0 if os.environ.get("STALE_WG") else int(time.time())))
@@ -253,7 +253,7 @@ elif name=="wg-quick":
  if args==["--help"]:
   if os.environ.get("BROKEN_WG_QUICK"):sys.exit(1)
   print("Usage: wg-quick [ up | down | strip ]")
- elif args[0]=="up":(p/"tunnel-active").touch()
+ elif args[0]=="up":(p/"tunnel-active").write_text(m["client_wireguard_public_key"])
  elif args[0]=="down":(p/"tunnel-active").unlink()
  else:raise AssertionError(args)
 elif name=="wireguard-go":sys.exit(0)
@@ -360,6 +360,47 @@ elif name=="ip":
         key.write_text("changed-by-user")
         self.call("setup",code="CONFIG_CONFLICT")
         self.assertEqual(key.read_text(),"changed-by-user")
+
+    def reissue(self):
+        # The administrator reissues the same device with new keys and a new address.
+        self.manifest.update(client_wireguard_public_key=base64.b64encode(b"d"*32).decode(),wireguard_address="10.77.0.3/32")
+        self.data["manifest.json"]=json.dumps(self.manifest).encode()
+        self.data["wg.key"]=base64.b64encode(b"e"*32)+b"\n"
+        self.bundle()
+        if not WINDOWS:(self.path/"manifest-test.json").write_text(json.dumps(self.manifest))
+
+    def test_reissued_bundle_replaces_and_archives_previous_install(self):
+        self.setup()
+        old={q.name:q.read_bytes() for q in self.native_state().iterdir()}
+        self.reissue()
+        self.call("check",code="REISSUE_READY")
+        self.call("verify",code="REISSUE_READY")
+        self.setup()
+        archives=list((self.native_state().parent/".archive").iterdir())
+        self.assertEqual(len(archives),1)
+        self.assertEqual(old,{q.name:q.read_bytes() for q in archives[0].iterdir()})
+        self.assertIn(json.dumps(self.manifest).encode(),(self.native_state()/"manifest.json").read_bytes())
+        # CI Windows has no WireGuard; the reissue state is resolved either way.
+        self.call("check",code="DEPENDENCY_MISSING" if WINDOWS else "CHECKED")
+
+    @unittest.skipIf(WINDOWS, "Unix CLI route/tunnel behavior")
+    def test_reissue_stops_only_the_previous_tunnel_of_this_device(self):
+        self.call("setup",code="CONFIGURED")
+        self.reissue()
+        self.call("setup",code="CONFIGURED")
+        calls=[json.loads(line) for line in (self.path/"commands.jsonl").read_text().splitlines()]
+        quick=[args[:1] for name,args in calls if name=="wg-quick" and args[0] in ("up","down")]
+        self.assertEqual(quick,[["up"],["down"],["up"]])
+        self.assertEqual((self.path/"tunnel-active").read_text(),self.manifest["client_wireguard_public_key"])
+
+    @unittest.skipIf(WINDOWS, "Unix CLI route/tunnel behavior")
+    def test_reissue_keeps_a_foreign_tunnel_and_the_previous_install(self):
+        self.call("setup",code="CONFIGURED")
+        old={q.name:q.read_bytes() for q in self.native_state().iterdir()}
+        self.reissue();self.env["WRONG_TUNNEL"]="1"
+        self.call("setup",code="TUNNEL_CONFLICT")
+        self.assertTrue((self.path/"tunnel-active").exists())
+        self.assertEqual(old,{q.name:q.read_bytes() for q in self.native_state().iterdir()})
 
     def test_manifest_rejects_shell_injection(self):
         self.manifest["vm_hostname"]="employee-x;touch /tmp/unexpected"
