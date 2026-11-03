@@ -25,6 +25,9 @@ sudo_check=pending
 cli_check=pending
 sftp_check=pending
 claude_auth=user_action_required
+desktop_tls=pending
+desktop_url=""
+tls_pin=""
 cleanup() { [[ -z "$stage" ]] || rm -rf -- "$stage"; }
 trap cleanup EXIT
 report() {
@@ -33,8 +36,12 @@ report() {
     if [[ "${device:-}" =~ ^[a-z][a-z0-9-]{0,27}$ && "${vm_hostname:-}" =~ ^[a-z][a-z0-9-]{0,63}$ ]]; then
         identity=",\"device_id\":\"$device\",\"vm_hostname\":\"$vm_hostname\""
     fi
-    printf '{"schema_version":1,"platform":"%s","code":"%s","package_verified":%s,"client_ready":%s,"tunnel_handshake":"%s","ssh_identity":"%s","assigned_vm":"%s","sudo":"%s","cli":"%s","sftp_roundtrip":"%s","claude_auth":"%s","real_task":"pending"%s}\n' \
-        "$platform" "$1" "$package_verified" "$client_ready" "$handshake" "$ssh_identity" "$assigned_vm" "$sudo_check" "$cli_check" "$sftp_check" "$claude_auth" "$identity"
+    # The VM browser entry and its certificate pin are public; reported once validated.
+    if [[ "$desktop_url" =~ ^https://[0-9.]+:8443/$ && "$tls_pin" =~ ^[a-f0-9]{64}$ ]]; then
+        identity="$identity,\"desktop_url\":\"$desktop_url\",\"desktop_tls_sha256\":\"$tls_pin\""
+    fi
+    printf '{"schema_version":1,"platform":"%s","code":"%s","package_verified":%s,"client_ready":%s,"tunnel_handshake":"%s","ssh_identity":"%s","assigned_vm":"%s","sudo":"%s","cli":"%s","sftp_roundtrip":"%s","claude_auth":"%s","desktop_tls":"%s","real_task":"pending"%s}\n' \
+        "$platform" "$1" "$package_verified" "$client_ready" "$handshake" "$ssh_identity" "$assigned_vm" "$sudo_check" "$cli_check" "$sftp_check" "$claude_auth" "$desktop_tls" "$identity"
 }
 fail() { printf '%s\n' "$2" >&2; report "$1"; exit "${3:-2}"; }
 while [[ $# -gt 0 ]]; do
@@ -143,21 +150,24 @@ peer="$(json_get wireguard_public_key)" || fail MANIFEST_INVALID "manifest 缺�
 client_public="$(json_get client_wireguard_public_key)" || fail MANIFEST_INVALID "manifest 缺少设备公钥。"
 endpoint="$(json_get wireguard_endpoint)" || fail MANIFEST_INVALID "manifest 缺少 Endpoint。"
 tunnel="$(json_get tunnel_name)" || fail MANIFEST_INVALID "manifest 缺少隧道名。"
-# Only terminal-mode OCI Hub bundles are supported; v1 and desktop bundles are retired.
-unsupported="只支持终端模式的 OCI Hub 设备包（v2、profile=oci-hub、access_mode=mosh）；请联系管理员换发新包，见 README。"
+# Only the unified OCI Hub bundle is supported: the Mosh terminal and the VM browser
+# entry together. v1, terminal-only and desktop-only bundles are retired.
+unsupported="只支持统一格式的 OCI Hub 设备包（v2、profile=oci-hub、access_mode=mosh，并带 VM 浏览器入口 desktop_url 与 TLS pin）；请联系管理员换发新包，见 README。"
 [[ "$schema" == 2 && "$tool_version" == 2.0.0 ]] || fail MANIFEST_UNSUPPORTED "$unsupported"
 profile="$(json_get profile)" || fail MANIFEST_UNSUPPORTED "$unsupported"
 access_mode="$(json_get access_mode)" || fail MANIFEST_UNSUPPORTED "$unsupported"
 [[ "$profile" == oci-hub && "$access_mode" == mosh ]] || fail MANIFEST_UNSUPPORTED "$unsupported"
+manifest_desktop_url="$(json_get desktop_url)" || fail MANIFEST_UNSUPPORTED "$unsupported"
+manifest_tls_pin="$(json_get tls_certificate_sha256)" || fail MANIFEST_UNSUPPORTED "$unsupported"
 ssh_user="$(json_get ssh_user)" || fail MANIFEST_INVALID "Missing native SSH user."
 ssh_alias="$(json_get ssh_alias)" || fail MANIFEST_INVALID "Missing profile alias."
 [[ "$ssh_user" == employee && "$ssh_alias" == "oci-hub-$device" ]] || fail MANIFEST_INVALID "Invalid native SSH profile."
 mosh_ports="$(json_get mosh_ports)" || fail MANIFEST_INVALID "Missing device Mosh ports."
-[[ "$mosh_ports" =~ ^(6[01][0-9]{3}):(6[01][0-9]{3})$ ]] || fail MANIFEST_INVALID "Invalid Mosh ports."
-[[ "${mosh_ports%:*}" -le "${mosh_ports#*:}" && "${mosh_ports#*:}" -le 61000 ]] || fail MANIFEST_INVALID "Invalid Mosh range."
+# The VM runs a native mosh-server on its default UDP range; the bundle claims exactly that.
+[[ "$mosh_ports" == 60000:61000 ]] || fail MANIFEST_INVALID "Invalid Mosh ports."
 # Employee IDs are at most 20 characters, as on the administrator side.
 vm_pattern='^oci-hub-[a-z][a-z0-9-]{0,19}$'
-extra_fields="$(printf '%s\n' profile ssh_user ssh_alias access_mode mosh_ports)"
+extra_fields="$(printf '%s\n' profile ssh_user ssh_alias access_mode mosh_ports desktop_url tls_certificate_sha256)"
 wg_port=51824
 wg_keepalive=15
 vnet_pattern='^wh-[a-f0-9]{8}$'
@@ -171,6 +181,10 @@ fi
 [[ "$device" =~ ^[a-z][a-z0-9-]{0,27}$ && "$vm_hostname" =~ $vm_pattern &&
    "$tunnel" =~ $vnet_pattern && "$peer" =~ ^[A-Za-z0-9+/]{43}=$ &&
    "$client_public" =~ ^[A-Za-z0-9+/]{43}=$ ]] || fail MANIFEST_INVALID "设备或公钥格式无效。"
+# The tunnel name is derived from the device, exactly as the administrator side derives it.
+if [[ "$platform" == macos ]]; then tunnel_digest="$(printf 'oci-hub:%s' "$device" | shasum -a 256 | awk '{print $1}')"
+else tunnel_digest="$(printf 'oci-hub:%s' "$device" | sha256sum | awk '{print $1}')"; fi
+[[ "$tunnel" == "wh-${tunnel_digest:0:8}" ]] || fail MANIFEST_INVALID "Tunnel name does not match the device."
 # Login alias for the system ssh/mosh: <employee-id>-vm, derived from oci-hub-<employee-id>.
 vm_alias="${vm_hostname#oci-hub-}-vm"
 valid_ip() {
@@ -185,6 +199,11 @@ valid_ip() {
 valid_ip "$gateway" && valid_ip "$endpoint" && valid_ip "${address%/32}" &&
     [[ "$address" == "${address%/32}/32" && "${address%/32}" != "$gateway" ]] ||
     fail MANIFEST_INVALID "入口、Endpoint 或 /32 地址无效。"
+# The VM browser entry is this VM's overlay HTTPS; verify checks its certificate pin.
+[[ "$manifest_desktop_url" == "https://$gateway:8443/" && "$manifest_tls_pin" =~ ^[a-f0-9]{64}$ ]] ||
+    fail MANIFEST_INVALID "Invalid VM browser identity."
+desktop_url="$manifest_desktop_url"
+tls_pin="$manifest_tls_pin"
 [[ "$(awk -v gateway="$gateway" 'NF {if (NF!=3 || $1!=gateway || $2!="ssh-ed25519" || $3 !~ /^[A-Za-z0-9+\/=]+$/) bad=1; n++} END {print (!bad && n==1) ? "ok" : "bad"}' "$stage/known_hosts")" == ok ]] ||
     fail HOST_PIN_INVALID "入口主机身份文件无效。"
 ssh-keygen -lf "$stage/known_hosts" >/dev/null 2>&1 &&
@@ -515,6 +534,14 @@ case "$action" in
         owned_tunnel || fail TUNNEL_CONFLICT "Live tunnel identity or routing mismatch."
         nonce="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
         prefix="WS_${nonce}"
+        # The VM browser entry must present exactly the pinned certificate before the
+        # employee is told to open it; the browser's own warning is not a check.
+        command -v openssl >/dev/null || fail DEPENDENCY_MISSING "TLS pin verification requires openssl."
+        desktop_tls=failed
+        run_bounded 15 openssl s_client -connect "$gateway:8443" -servername "$gateway" < /dev/null > "$stage/tls-peer" 2>/dev/null || fail TLS_PIN_FAILED "VM browser TLS handshake failed."
+        openssl x509 -in "$stage/tls-peer" -outform DER -out "$stage/tls.der" 2>/dev/null || fail TLS_PIN_FAILED "VM browser TLS certificate invalid."
+        [[ "$(hash_file "$stage/tls.der")" == "$tls_pin" ]] || fail TLS_PIN_FAILED "VM browser TLS identity mismatch; do not open or accept it."
+        desktop_tls=passed
         # One complete command fits the PTY line discipline. No queued commands
         # remain for a CLI or shell hook to consume. No gateway command is appended.
         payload="$(sed -e "s/__PREFIX__/$prefix/g" -e "s/__VM__/$vm_hostname/g" "$repo_dir/scripts/verify-session.py" | base64 | tr -d '\r\n')"

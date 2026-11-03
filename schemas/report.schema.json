@@ -15,6 +15,7 @@
     "cli",
     "sftp_roundtrip",
     "claude_auth",
+    "desktop_tls",
     "real_task"
   ],
   "properties": {
@@ -102,6 +103,13 @@
         "user_action_required"
       ]
     },
+    "desktop_tls": {
+      "enum": [
+        "pending",
+        "passed",
+        "failed"
+      ]
+    },
     "real_task": {
       "enum": [
         "pending",
@@ -118,6 +126,14 @@
     "vm_hostname": {
       "type": "string",
       "pattern": "^[a-z][a-z0-9-]{0,63}$"
+    },
+    "desktop_url": {
+      "type": "string",
+      "pattern": "^https://[0-9.]+:8443/$"
+    },
+    "desktop_tls_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
     }
   }
 }
