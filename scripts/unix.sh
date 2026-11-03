@@ -136,9 +136,10 @@ for file in client-key known_hosts manifest.json wg.key; do
     chmod 600 "$stage/$file"
 done
 json_get() {
+    local file="${2:-$stage/manifest.json}"
     if [[ "$platform" == macos ]]; then
-        /usr/bin/plutil -extract "$1" raw -o - "$stage/manifest.json" 2>/dev/null
-    else jq -er --arg key "$1" '.[$key] | if type=="string" or type=="number" then tostring else error("type") end' "$stage/manifest.json" 2>/dev/null; fi
+        /usr/bin/plutil -extract "$1" raw -o - "$file" 2>/dev/null
+    else jq -er --arg key "$1" '.[$key] | if type=="string" or type=="number" then tostring else error("type") end' "$file" 2>/dev/null; fi
 }
 schema="$(json_get schema_version)" || fail MANIFEST_INVALID "manifest 无效。"
 tool_version="$(json_get tool_version)" || fail MANIFEST_INVALID "manifest 无效。"
@@ -336,8 +337,40 @@ require_installed() {
             ssh_config_legacy=true
             continue
         fi
+        if reissued; then fail REISSUE_READY "A newer bundle for this device was issued; run setup to replace the installed one."; fi
         fail CONFIG_CONFLICT "Installed configuration differs; nothing overwritten."
     done
+}
+# A reissue is a complete earlier install of this same device from a different bundle.
+# Edits to an install of this bundle remain a conflict and are never replaced.
+reissued() {
+    local old_sha
+    [[ -d "$state" && ! -L "$state" && -f "$state/bundle.sha256" && ! -L "$state/bundle.sha256" &&
+       -f "$state/manifest.json" && ! -L "$state/manifest.json" ]] || return 1
+    old_sha="$(tr -d '\r\n' < "$state/bundle.sha256")"
+    [[ "$old_sha" =~ ^[a-f0-9]{64}$ && "$old_sha" != "$expected_sha" ]] || return 1
+    [[ "$(json_get device_id "$state/manifest.json")" == "$device" ]]
+}
+# Stop the previous bundle's tunnel (same name, earlier key) and archive its files.
+replace_reissued() {
+    local old_public live archive
+    if $client_ready; then
+        require_tunnel_admin
+        if resolve_tunnel_interface; then
+            old_public="$(json_get client_wireguard_public_key "$state/manifest.json")" || old_public=""
+            live="$(sudo "$wg_bin" show "$wg_interface" public-key 2>/dev/null)" || live=""
+            [[ -n "$old_public" && "$live" == "$old_public" && -f "$state/$tunnel.conf" && ! -L "$state/$tunnel.conf" ]] ||
+                fail TUNNEL_CONFLICT "Existing tunnel does not belong to this device's previous bundle; nothing stopped."
+            run_wg_quick down "$state/$tunnel.conf" >/dev/null 2>&1 || fail TUNNEL_STOP_FAILED "Previous tunnel did not stop; nothing replaced."
+        fi
+    fi
+    archive="$state_root/.archive"
+    [[ ! -L "$archive" ]] || fail STATE_PATH_UNSAFE "Symlink archive directory rejected."
+    { mkdir -p "$archive" && chmod 700 "$archive"; } || fail CONFIG_REPLACE_FAILED "Could not create the archive directory; nothing replaced."
+    archive="$archive/$device-$(date +%Y%m%d-%H%M%S)"
+    [[ ! -e "$archive" ]] || fail CONFIG_REPLACE_FAILED "Archive target exists; nothing replaced."
+    mv "$state" "$archive" || fail CONFIG_REPLACE_FAILED "Could not archive the previous bundle; nothing replaced."
+    printf 'Previous bundle archived to %s\n' "$archive" >&2
 }
 user_ssh_dir="$HOME/.ssh"
 user_ssh_config="$user_ssh_dir/config"
@@ -451,12 +484,14 @@ check_new_tunnel_route() {
 case "$action" in
     check)
         if ! $client_ready; then report DEPENDENCY_MISSING; exit 3; fi
+        if reissued; then report REISSUE_READY; exit 0; fi
         if [[ -d "$state" ]]; then require_installed; fi
         report CHECKED ;;
     setup)
         if [[ -d "$state_root" && ! -f "$state_root/.workspace-onboarding" ]]; then
             [[ -z "$(ls -A "$state_root")" ]] || fail STATE_ROOT_CONFLICT "Existing directory is not managed by this project."
         fi
+        if reissued; then replace_reissued; fi
         if [[ -e "$state" ]]; then
             require_installed
             if $ssh_config_legacy; then

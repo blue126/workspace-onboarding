@@ -94,9 +94,45 @@ function Require-Installed() {
         if((Hash-File $existing) -cne (Hash-File (Join-Path $stage $name))) {
             # The pre-alias ssh_config stays usable; only setup upgrades it.
             if($name -ceq 'ssh_config' -and (Hash-File $existing) -ceq (Hash-File (Join-Path $stage 'ssh_config.v1'))) { $script:sshConfigLegacy=$true; continue }
+            if(Test-Reissued) { Stop-Setup 'REISSUE_READY' 'A newer bundle for this device was issued; run setup to replace the installed one.' }
             Stop-Setup 'CONFIG_CONFLICT' 'Installed configuration differs; nothing overwritten.'
         }
     }
+}
+# A reissue is a complete earlier install of this same device from a different bundle.
+# Edits to an install of this bundle remain a conflict and are never replaced.
+function Test-Reissued() {
+    if(!(Test-Path -LiteralPath $state -PathType Container)) { return $false }
+    if((Get-Item -LiteralPath $state).Attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }
+    $oldDigest=Join-Path $state 'bundle.sha256'
+    $oldManifest=Join-Path $state 'manifest.json'
+    foreach($path in @($oldDigest,$oldManifest)) {
+        if(!(Test-Path -LiteralPath $path -PathType Leaf)) { return $false }
+        if((Get-Item -LiteralPath $path).Attributes -band [IO.FileAttributes]::ReparsePoint) { return $false }
+    }
+    $oldSha=[IO.File]::ReadAllText($oldDigest).Trim()
+    if($oldSha -cnotmatch '^[a-f0-9]{64}$' -or $oldSha -ceq $Sha256) { return $false }
+    try { $old=Get-Content -LiteralPath $oldManifest -Raw | ConvertFrom-Json } catch { return $false }
+    return ($old.device_id -ceq $manifest.device_id)
+}
+# Remove the previous bundle's tunnel service (same name, earlier key) and archive its files.
+function Replace-Reissued() {
+    $service=Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+    if($service) {
+        if(!(Admin)) { Stop-Setup 'NEEDS_ADMIN' 'Rerun setup in elevated PowerShell to replace the previous tunnel; nothing replaced.' }
+        Require-OwnedService $service
+        $removed=Native $wireguard @('/uninstalltunnelservice',$manifest.tunnel_name)
+        if($removed.ExitCode -ne 0) { Stop-Setup 'TUNNEL_STOP_FAILED' 'Previous tunnel service was not removed; nothing replaced.' }
+    }
+    $archive=Join-Path $StateRoot '.archive'
+    try {
+        if(!(Test-Path -LiteralPath $archive)) { [void](New-Item -ItemType Directory -Path $archive); Private-Acl $archive }
+        if((Get-Item -LiteralPath $archive).Attributes -band [IO.FileAttributes]::ReparsePoint) { Stop-Setup 'STATE_PATH_UNSAFE' 'Archive directory is a link.' }
+        $target=Join-Path $archive ($manifest.device_id+'-'+(Get-Date -Format 'yyyyMMdd-HHmmss'))
+        if(Test-Path -LiteralPath $target) { Stop-Setup 'CONFIG_REPLACE_FAILED' 'Archive target exists; nothing replaced.' }
+        Move-Item -LiteralPath $state -Destination $target
+    } catch { Stop-Setup 'CONFIG_REPLACE_FAILED' 'Could not archive the previous bundle; nothing replaced.' }
+    [Console]::Error.WriteLine('Previous bundle archived to '+$target)
 }
 function Setup-SshInclude() {
     # Put this device's config first in %USERPROFILE%\.ssh\config so `ssh <id>-vm` works; mirrors unix.sh.
@@ -336,11 +372,13 @@ $hostLine
     $installedFiles=@('client-key','known_hosts','manifest.json','wg.key','ssh_config',($manifest.tunnel_name+'.conf'),'bundle.sha256')
     switch($Action) {
         'check' {
+            if(Test-Reissued) { if(!$result.client_ready) { Report 'DEPENDENCY_MISSING'; exit 3 }; Report 'REISSUE_READY'; exit 0 }
             if(Test-Path -LiteralPath $state) { Require-Installed }
             if(!$result.client_ready) { Report 'DEPENDENCY_MISSING'; exit 3 }
             Report 'CHECKED'
         }
         'setup' {
+            if(Test-Reissued) { Replace-Reissued }
             if(Test-Path -LiteralPath $state) {
                 Require-Installed
                 if($sshConfigLegacy) {

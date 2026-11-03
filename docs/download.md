@@ -74,7 +74,20 @@ if($entries -ne $null) {
 | 输出 | 处理 |
 | --- | --- |
 | `STOP: cannot read outer ZIP` / `STOP: unexpected entries` / `STOP: not regular files` | 停止，请员工联系管理员。 |
-| `STOP: already in …` | 不要解开。向员工说明“接收目录里有上一次的设备文件，新旧混在一起会让脚本用错身份”，请他同意后把这些文件移到备份目录，再重新检查。不覆盖也不复用。 |
+| `STOP: already in …` | 接收目录里有上一次的设备文件，新旧混在一起会让脚本用错身份。告诉员工后，用下面的命令把它们整体移到接收目录里的 `_archive-<时间>/`（只移动，不删除、不覆盖、不复用），再重新检查。 |
+
+**移走上一次的设备文件（仅 `STOP: already in …` 时）：** macOS / Linux：
+
+```bash
+d="$HOME/Downloads/employee-workspace"; a="$d/_archive-$(date +%Y%m%d-%H%M%S)"; mkdir "$a" && for f in device-bundle.zip device-bundle.sha256 README.md; do [ ! -e "$d/$f" ] || mv -n "$d/$f" "$a/"; done
+```
+
+Windows（`$dest` 已设置）：
+
+```powershell
+$archive=Join-Path $dest ('_archive-'+(Get-Date -Format 'yyyyMMdd-HHmmss')); New-Item -ItemType Directory $archive | Out-Null
+foreach($f in 'device-bundle.zip','device-bundle.sha256','README.md') { $p=Join-Path $dest $f; if(Test-Path -LiteralPath $p) { Move-Item -LiteralPath $p -Destination $archive } }
+```
 
 **解开（只在 `READY` 之后）：** 只解开外层的三个文件到接收目录，不覆盖已有文件。macOS / Linux：
 
