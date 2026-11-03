@@ -27,7 +27,7 @@
 | VERIFY_TIMEOUT | SSH 60秒或 SFTP 30秒未结束，停止反馈，不反复验证或延长超时 |
 | CLAUDE_AUTH_CHECK_FAILED | Claude 状态命令超时或返回无效结果，不等同未登录；停止交管理员处理 |
 | SFTP_ROUNDTRIP_FAILED / SFTP_CONTENT_MISMATCH | 只创建本次随机 /tmp/ws-onboarding-* 目录；失败时不删除未经核实内容，管理员可按本次 nonce 核查 |
-| CLAUDE_AUTH_USER_PENDING | 连接和 VM 浏览器证书已验证，个人授权待完成；按 [README 第 5 步](../README.md#第-5-步在-vm-浏览器里登录-claude)：VM 里运行 workspace-login，本机浏览器打开 `desktop_url`，指纹一致后在画面里的 VM 浏览器中完成 |
+| CLAUDE_AUTH_USER_PENDING | 连接和 VM 浏览器证书已验证，个人授权待完成；按 [README 第 5 步](../README.md#第-5-步在-vm-浏览器里登录-claude)：VM 里运行 workspace-login，本机浏览器打开它显示的地址，在画面里的 VM 浏览器中完成（证书已由 verify 核对，员工不比对指纹） |
 | MOSH_CLIENT_MISSING / INTERACTIVE_TERMINAL_REQUIRED / MOSH_WSL_REQUIRED | 见 [Mosh 登录](mosh.md) |
 | HANDSHAKE_INSPECTION_UNAVAILABLE | SSH/SFTP 等按报告判断，先核对 CLI 客户端和本人 sudo/UAC 授权；不要把 unavailable 写成 passed |
 | OPERATION_FAILED | Windows 已抑制可能含私密信息的原始异常；报告步骤、版本和此代码，别贴私钥或完整配置 |

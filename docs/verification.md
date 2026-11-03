@@ -25,9 +25,9 @@
 | CONNECTION_VERIFIED | 0 | 上述连接检查和 Claude 订阅登录状态通过；不代表真实项目任务已验收 |
 | 其他错误码 | 非 0 | 停止，按故障处理说明反馈；不要改条件使其通过 |
 
-完整连接验收要求 `package_verified=true`、`client_ready=true`，以及 `desktop_tls`、`tunnel_handshake`、`ssh_identity`、`assigned_vm`、`sudo`、`cli`、`sftp_roundtrip` 全部为 `passed`。`desktop_tls` 是 verify 用设备包 pin 核对 VM 浏览器入口（`desktop_url`）证书的结果；setup 输出 `pending`，不一致时 verify 以 `TLS_PIN_FAILED` 停止。`desktop_url` 与 `desktop_tls_sha256` 是公开信息，供员工在本机浏览器中打开并核对证书指纹。该入口背后是 noVNC + Firefox 或 KasmVNC 桌面（随 VM 而定），均不要求 VNC 或网页密码。`claude_auth=user_action_required` 单独交还本人处理；`unavailable` 表示检查失败，不能当作尚未登录。
+完整连接验收要求 `package_verified=true`、`client_ready=true`，以及 `desktop_tls`、`tunnel_handshake`、`ssh_identity`、`assigned_vm`、`sudo`、`cli`、`sftp_roundtrip` 全部为 `passed`。`desktop_tls` 是 verify 用设备包 pin 核对 VM 浏览器入口（`desktop_url`）证书的结果；setup 输出 `pending`，不一致时 verify 以 `TLS_PIN_FAILED` 停止。`desktop_url` 与 `desktop_tls_sha256` 是公开信息，供 Agent 检查；员工打开的是 `workspace-login` 显示的同一地址，不需要比对指纹。该入口背后是 noVNC + Firefox 或 KasmVNC 桌面（随 VM 而定），均不要求 VNC 或网页密码。`claude_auth=user_action_required` 单独交还本人处理；`unavailable` 表示检查失败，不能当作尚未登录。
 
-个人登录：进入 VM 后运行 **`workspace-login`**，在本机浏览器打开 `desktop_url`（VM 桌面），指纹与 `desktop_tls_sha256` 一致后，由本人在画面里的 VM 浏览器中完成授权，再执行一次原 verify，见 [README 第 5 步](../README.md#第-5-步在-vm-浏览器里登录-claude)。不要在本机浏览器打开 Claude 授权链接。交接内容见 [README 第 4 步](../README.md#第-4-步交接登录方式)；不得通过重新登录来掩盖 `CLAUDE_AUTH_CHECK_FAILED`。
+个人登录：进入 VM 后运行 **`workspace-login`**，在本机浏览器打开它显示的地址（VM 桌面），由本人在画面里的 VM 浏览器中完成授权，再执行一次原 verify，见 [README 第 5 步](../README.md#第-5-步在-vm-浏览器里登录-claude)。不要在本机浏览器打开 Claude 授权链接。交接内容见 [README 第 4 步](../README.md#第-4-步交接登录方式)；不得通过重新登录来掩盖 `CLAUDE_AUTH_CHECK_FAILED`。
 
 ## 连接约定与停止条件
 

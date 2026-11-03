@@ -15,19 +15,19 @@
 3. **不收集秘密。** 设备包由员工本人在 https://cc.willfan.me/me 下载；你不代为登录，不索取验证码、密码、Cookie 或令牌。sudo 密码和 UAC 由员工在自己的终端或弹窗里输入，见 [系统授权](docs/system-authorization.md)。
 4. **私钥不出现在任何输出里。** 不打开内层设备包，不打印、上传或转发密钥，不执行包内文件；提醒员工妥善保管设备包。
 5. **不动别人的东西。** 不覆盖或复用接收目录里已有的设备文件，不停止其他 VPN；冲突先问员工。
-6. **Claude 只在 VM 里登录。** 员工在 VM 内运行 `workspace-login`，在 VM 的浏览器（本机浏览器经 VPN 打开 `desktop_url` 看到的 VM 桌面）里完成；不在本机登录，不用本机浏览器打开授权链接。
+6. **Claude 只在 VM 里登录。** 员工在 VM 内运行 `workspace-login`，在 VM 的浏览器（本机浏览器经 VPN 打开 `workspace-login` 显示的地址看到的 VM 桌面）里完成；不在本机登录，不用本机浏览器打开授权链接或登录邮件里的链接。
 
 ## 需要员工亲自做的
 
 | 员工要做的事 | 你向员工说明的原因 |
 | --- | --- |
-| 登录 https://cc.willfan.me/me ，点击「下载设备接入包」 | 登录验证码只发到你的邮箱，设备包里有你专属的私钥。有效期和次数以页面为准，过期请发邮件到 hello@willfan.me 重新发送。 |
+| 登录 https://cc.willfan.me/me ，点击「下载设备接入包」 | 登录验证码只发到你的邮箱，设备包里有你专属的私钥。登录后可随时重新下载；页面显示没有设备包时，请发邮件到 hello@willfan.me 重新发送。 |
 | macOS / Linux：在终端输入 sudo 密码 | 安装 VPN、Mosh 等软件并启用隧道要改系统网络设置；密码只在你自己的终端里输入，通常一次即可。 |
 | Windows：在 UAC 弹窗点「是」 | 安装 WireGuard 隧道服务需要管理员权限；setup 和 verify 在同一个管理员窗口里运行，只需确认一次。 |
 | 条件：安装缺少的 Git / python3 / unzip / Homebrew | 用来下载本项目、检查和解开设备包、安装客户端；安装需要你确认或输入密码。见 [系统授权](docs/system-authorization.md#会装什么为什么)。 |
 | 条件，Windows：WSL 里输入 Linux 密码装 Mosh，或安装 MobaXterm | Windows 没有原生 Mosh 客户端。见 [Mosh 登录](docs/mosh.md#windows)。 |
 | 最后：在自己的终端运行 `mosh <员工ID>-vm` | 这是你和工作区的交互会话，只能在你自己的终端里打开。 |
-| 登录 Claude：VM 里运行 `workspace-login`，在本机浏览器打开 `desktop_url`（VM 桌面），核对证书指纹后在画面里的 VM 浏览器完成登录 | Claude 账号是你自己的，登录状态只留在你的 VM 里；证书指纹核对一致，才能确认打开的是你自己的 VM。 |
+| 登录 Claude：VM 里运行 `workspace-login`，在本机浏览器打开它显示的地址（VM 桌面），在画面里的 VM 浏览器完成登录 | Claude 账号是你自己的，登录状态只留在你的 VM 里。浏览器的证书提示是正常的，证书已由我在 verify 中核对过。 |
 
 ## 第 1 步：取得源码
 
@@ -38,13 +38,12 @@
 ## 第 2 步：设备包
 
 - **需求：** 员工下载后，你在下载目录找到最近一天内的 `device-bundle*.zip`（外层 ZIP），检查通过后只把它的三个文件解开到接收目录：macOS/Linux `~/Downloads/employee-workspace/`，Windows `%USERPROFILE%\Downloads\employee-workspace\`。
-- **检查（原样运行）：** macOS / Linux 在源码目录运行 `python3 -I scripts/check-outer-zip.py "<外层ZIP>" "$HOME/Downloads/employee-workspace"`；Windows 用 [设备包下载](docs/download.md#校验与解开两种方式相同) 里的 PowerShell 检查。
+- **检查（原样运行）：** macOS / Linux 在源码目录运行 `python3 -I scripts/check-outer-zip.py "<外层ZIP>" "$HOME/Downloads/employee-workspace"`；Windows 用 [设备包下载](docs/download.md#校验与解开) 里的 PowerShell 检查。
 - **验收：** 检查结果为 `READY`；解开后接收目录里有 `device-bundle.zip`、`device-bundle.sha256`、`README.md`（目录里原有的其他文件保留）。内层包的完整性由第 3 步的 bootstrap 用 `device-bundle.sha256` 核对。
 - **可能遇到的问题：**
   - 外层 ZIP 和内层包同名 `device-bundle.zip`：外层留在下载目录，别放进接收目录。
   - 找不到或找到多个 → 问员工是哪个文件；macOS 无权读“下载”文件夹 → 请员工在隐私弹窗中允许。
-  - `STOP: already in …` → 上一次的设备文件还在接收目录。告诉员工后按 [移走上一次的设备文件](docs/download.md#校验与解开两种方式相同) 移到 `_archive-<时间>/`，再重新检查；不覆盖、不删除。其他 `STOP` → 停止，请员工联系管理员。
-  - 员工登录不了网站但有 `/d/<令牌>` 链接 → 由员工本人按 [备用下载](docs/download.md#备用用-d令牌-链接下载) 操作。
+  - `STOP: already in …` → 上一次的设备文件还在接收目录。告诉员工后按 [移走上一次的设备文件](docs/download.md#校验与解开) 移到 `_archive-<时间>/`，再重新检查；不覆盖、不删除。其他 `STOP` → 停止，请员工联系管理员。
 
 ## 第 3 步：check → setup → verify
 
@@ -76,10 +75,11 @@
 
 ## 第 5 步：在 VM 浏览器里登录 Claude
 
-- **需求：** 员工在 `mosh <员工ID>-vm` 会话里运行 `workspace-login`，它在 VM 里启动图形 Firefox；员工在**本机**浏览器打开 verify 输出的 `desktop_url`（形如 `https://10.234.0.3:8443/`，只能经 VPN 访问），在画面里的 VM Firefox 完成 Claude 登录；页面给出授权码时回 mosh 终端粘贴。
+- **需求：** 员工在 `mosh <员工ID>-vm` 会话里运行 `workspace-login`，它在 VM 里启动图形 Firefox，并显示 VM 桌面的地址；员工在**本机**浏览器打开**这个地址**（只能经 VPN 访问），在画面里的 VM Firefox 完成 Claude 登录；页面给出授权码时回 mosh 终端粘贴。你不要自己把地址交给员工：它与 verify 输出的 `desktop_url` 相同，`desktop_url` 只供你检查。
+- **登录方式：** 用 Google 或 Apple 账号的，直接在 VM Firefox 里完成。用邮箱的，Anthropic 会发一封登录邮件：请员工**不要点击**邮件里的「Sign In」按钮（会在本机浏览器登录），而是右键复制链接地址，粘贴到 VM Firefox 的地址栏打开；无法直接粘贴时，先在 VM Firefox 地址栏点一下，再用同一网页里的「需要粘贴文本到远程浏览器？」粘贴。
 - **画面后端：** `desktop_url` 背后是 noVNC + Firefox（尚未升级的 VM），或 KasmVNC 桌面（已升级和新开户的 VM）。两者流程相同，也都不要求输入 VNC 或网页密码（只靠 VPN 和证书 pin 保护）；出现密码框就停止并联系管理员。
-- **为什么：** Claude 登录必须在 VM 里完成，账号凭据不落到本机；该地址只在 VPN 内可达，证书是这台 VM 自签的，浏览器会提示"不安全"，只有指纹一致才说明连到的是员工自己的 VM。
-- **证书（原样核对）：** 只有 verify 输出 `desktop_tls=passed` 才继续。浏览器提示证书不受信任时，请员工查看证书的 SHA-256 指纹，与 JSON 中的 `desktop_tls_sha256` 逐位比对（忽略冒号和大小写），一致才接受；不一致或 verify 不是 `passed` 就停止并联系管理员，不要点"继续访问"。
+- **为什么：** Claude 登录必须在 VM 里完成，账号凭据不落到本机；该地址只在 VPN 内可达，证书是这台 VM 自签的，浏览器会提示"不安全"。
+- **证书（由你核对，不交给员工）：** 只有 verify 输出 `desktop_tls=passed` 才让员工继续：这表示 verify 已用设备包里的 pin 核对过该地址的证书。此时告诉员工浏览器的证书提示是正常的，可以继续访问；不要请员工查看或比对指纹。`desktop_tls` 不是 `passed` 或出现 `TLS_PIN_FAILED` 时停止，请员工联系管理员，不要让员工打开该地址。
 - **验收：** 员工再运行一次 verify，结果 `CONNECTION_VERIFIED`（`claude_auth=passed`）。
 - **可能遇到的问题：** 页面打不开 → VPN 未连接，重跑 setup；画面空白或提示桌面未启动 → 先在 mosh 里运行 `workspace-login`，再刷新；不要在本机浏览器直接打开 Claude 授权链接。
 
@@ -87,7 +87,7 @@
 
 | 文档 | 什么时候读 |
 | --- | --- |
-| [docs/download.md](docs/download.md) | 两层 ZIP 的结构、检查规则、Windows 检查与解开、`/d/<令牌>` 备用下载 |
+| [docs/download.md](docs/download.md) | 下载入口、两层 ZIP 的结构、检查规则、Windows 检查与解开 |
 | [docs/system-authorization.md](docs/system-authorization.md) | sudo、UAC、macOS 授权；会装哪些软件、为什么 |
 | [docs/verification.md](docs/verification.md) | check/setup/verify 的结果码与验收字段（含 `desktop_tls`） |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | 任何非成功的 `code` |
