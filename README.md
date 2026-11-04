@@ -82,6 +82,7 @@
 - **证书（由你核对，不交给员工）：** 只有 verify 输出 `desktop_tls=passed` 才让员工继续：这表示 verify 已用设备包里的 pin 核对过该地址的证书。此时告诉员工浏览器的证书提示是正常的，可以继续访问；不要请员工查看或比对指纹。`desktop_tls` 不是 `passed` 或出现 `TLS_PIN_FAILED` 时停止，请员工联系管理员，不要让员工打开该地址。
 - **验收：** 员工再运行一次 verify，结果 `CONNECTION_VERIFIED`（`claude_auth=passed`）。
 - **可能遇到的问题：** 页面打不开 → VPN 未连接，重跑 setup；画面空白或提示桌面未启动 → 先在 mosh 里运行 `workspace-login`，再刷新；不要在本机浏览器直接打开 Claude 授权链接。
+- **完成后告诉员工：** 除了 mosh，还可以用浏览器打开 https://hapi.willfan.me （用申请邮箱的验证码登录，电脑和手机都可以）查看和继续 VM 上的 Claude Code 会话。这是同一台 VM 的网页入口，已经配置好，你不用做任何设置，也不要改动 VM 上和 HAPI 有关的配置。
 
 ## 资料目录
 
