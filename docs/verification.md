@@ -26,7 +26,7 @@
 | CONNECTION_VERIFIED | 0 | 上述连接检查和 Claude 订阅登录状态通过；不代表真实项目任务已验收 |
 | 其他错误码 | 非 0 | 停止，按故障处理说明反馈；不要改条件使其通过 |
 
-完整连接验收要求 `package_verified=true`、`client_ready=true`，以及 `desktop_tls`、`tunnel_handshake`、`ssh_identity`、`assigned_vm`、`sudo`、`cli`、`sftp_roundtrip` 全部为 `passed`。`desktop_tls` 是 verify 用设备包 pin 核对 VM 浏览器入口（`desktop_url`）证书的结果；setup 输出 `pending`，不一致时 verify 以 `TLS_PIN_FAILED` 停止。`desktop_url` 与 `desktop_tls_sha256` 是公开信息，供 Agent 检查；员工打开的是 `workspace-login` 显示的同一地址，不需要比对指纹。该入口背后是 noVNC + Firefox 或 KasmVNC 桌面（随 VM 而定），均不要求 VNC 或网页密码。`claude_auth=user_action_required` 单独交还本人处理；`unavailable` 表示检查失败，不能当作尚未登录。
+完整连接验收要求 `package_verified=true`、`client_ready=true`，以及 `desktop_tls`、`tunnel_handshake`、`ssh_identity`、`assigned_vm`、`sudo`、`cli`、`sftp_roundtrip` 全部为 `passed`。`desktop_tls` 是 verify 用设备包 pin 核对 VM 浏览器入口（`desktop_url`）证书的结果；setup 输出 `pending`，不一致时 verify 以 `TLS_PIN_FAILED` 停止。`desktop_url` 与 `desktop_tls_sha256` 是公开信息，供 Agent 检查；员工打开的是 `workspace-login` 显示的同一地址。`claude_auth=user_action_required` 单独交还本人处理；`unavailable` 表示检查失败，不能当作尚未登录。
 
 个人登录：进入 VM 后运行 **`workspace-login`**，在本机浏览器打开它显示的地址（VM 桌面），由本人在画面里的 VM 浏览器中完成授权，再执行一次原 verify，见 [README 第 5 步](../README.md#第-5-步在-vm-浏览器里登录-claude)。不要在本机浏览器打开 Claude 授权链接。交接内容见 [README 第 4 步](../README.md#第-4-步交接登录方式)；不得通过重新登录来掩盖 `CLAUDE_AUTH_CHECK_FAILED`。
 
@@ -35,7 +35,5 @@
 - **ping 不通不代表失败**，UDP 端口探测也不能证明握手成功；以脚本的 WireGuard、SSH 和 SFTP 检查为准。
 - 不要附加 `ssh … id` 等远程命令，也不要指定 sftp 子系统；PTY 与 SFTP 由脚本处理。
 - SSH 验证最长 60 秒，每次 SFTP 操作最长 30 秒；超时返回 VERIFY_TIMEOUT，停止反馈，不再慢喂输入或增加等待时间。
-- 验证已兼容终端 OSC/ANSI 输出，Claude 检查不读取会话输入。不要修改 VM 的 `.bashrc`、创建 ssh/sftp 垫片、关闭主机密钥校验，或把失败结果标为通过。
+- 不要修改 VM 的 `.bashrc`、创建 ssh/sftp 垫片、关闭主机密钥校验，或把失败结果标为通过。
 - 发生错误后停止，反馈命令、系统、JSON 错误码及未通过字段。依赖/授权问题解决后可重跑原命令；其他错误交管理员处理，不连续重复验证。
-
-Claude 状态只调用 [官方 `claude auth status`](https://code.claude.com/docs/en/cli-reference)，不发模型请求、不消耗对话 token；邮箱、令牌和原始登录输出不进入验收报告。

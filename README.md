@@ -6,7 +6,7 @@
 
 本页给出每一步的需求、验收标准和常见问题，具体怎么执行由你根据员工的系统决定；细节见文末 [资料目录](#资料目录)。只有标出的命令需要原样使用。
 
-**支持范围：** 只支持统一格式的 OCI Hub 设备包（v2、`profile=oci-hub`、`access_mode=mosh`，并带 VM 浏览器入口 `desktop_url` 与证书 pin），VM 主机名总是 `oci-hub-<员工ID>`。系统：macOS 12+、Ubuntu 22.04+/Debian 12+、Windows 10/11（在 WSL 里运行的 Agent 也按 Windows 处理）。其他情况停止并告诉员工。
+**支持范围：** 管理员签发的设备包（格式由 check 核对），VM 主机名总是 `oci-hub-<员工ID>`。系统：macOS 12+、Ubuntu 22.04+/Debian 12+、Windows 10/11（在 WSL 里运行的 Agent 也按 Windows 处理）。其他情况停止并告诉员工。
 
 ## 规则
 
@@ -60,7 +60,7 @@
 - **可能遇到的问题：**
   - `NEEDS_ADMIN` → 需要员工在可输入的终端或管理员窗口里授权，按 [系统授权](docs/system-authorization.md)；你的工具拒绝提权时，把整条命令交给员工自己运行。
   - `HOMEBREW_REQUIRED` → 请员工安装 Homebrew 后重跑 setup。
-  - `MANIFEST_UNSUPPORTED` → 旧版、只有终端或只有桌面的设备包，请员工联系管理员换发。
+  - `MANIFEST_UNSUPPORTED` → 设备包格式已停用，请员工联系管理员换发。
   - `TLS_PIN_FAILED`（verify）→ VM 浏览器入口的证书与设备包不符；停止，不要打开或信任该地址，请员工联系管理员。
   - `SSH_CONFIG_UNSAFE` → 隧道已配好，但 `~/.ssh/config` 不能安全写入，登录别名不可用；请员工决定，登录改用下面的备选。
   - 其他 `code` → [故障处理](docs/troubleshooting.md)。
@@ -77,7 +77,6 @@
 
 - **需求：** 员工在 `mosh <员工ID>-vm` 会话里运行 `workspace-login`，它在 VM 里启动图形 Firefox，并显示 VM 桌面的地址；员工在**本机**浏览器打开**这个地址**（只能经 VPN 访问），在画面里的 VM Firefox 完成 Claude 登录；页面给出授权码时回 mosh 终端粘贴。你不要自己把地址交给员工：它与 verify 输出的 `desktop_url` 相同，`desktop_url` 只供你检查。
 - **登录方式：** 用 Google 或 Apple 账号的，直接在 VM Firefox 里完成。用邮箱的，Anthropic 会发一封登录邮件：请员工**不要点击**邮件里的「Sign In」按钮（会在本机浏览器登录），而是右键复制链接地址，粘贴到 VM Firefox 的地址栏打开；无法直接粘贴时，先在 VM Firefox 地址栏点一下，再用同一网页里的「需要粘贴文本到远程浏览器？」粘贴。
-- **画面后端：** `desktop_url` 背后是 noVNC + Firefox（尚未升级的 VM），或 KasmVNC 桌面（已升级和新开户的 VM）。两者流程相同，也都不要求输入 VNC 或网页密码（只靠 VPN 和证书 pin 保护）；出现密码框就停止并联系管理员。
 - **为什么：** Claude 登录必须在 VM 里完成，账号凭据不落到本机；该地址只在 VPN 内可达，证书是这台 VM 自签的，浏览器会提示"不安全"。
 - **证书（由你核对，不交给员工）：** 只有 verify 输出 `desktop_tls=passed` 才让员工继续：这表示 verify 已用设备包里的 pin 核对过该地址的证书。此时告诉员工浏览器的证书提示是正常的，可以继续访问；不要请员工查看或比对指纹。`desktop_tls` 不是 `passed` 或出现 `TLS_PIN_FAILED` 时停止，请员工联系管理员，不要让员工打开该地址。
 - **验收：** 员工再运行一次 verify，结果 `CONNECTION_VERIFIED`（`claude_auth=passed`）。

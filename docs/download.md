@@ -8,11 +8,11 @@ Agent 不代为登录，不索取验证码、Cookie 或令牌。下载完成后�
 
 ## 校验与解开
 
-**两层 ZIP，名字相同：** 员工下载的 `device-bundle*.zip` 是外层 ZIP，里面恰好三个文件：`device-bundle.zip`（内层设备包，含 manifest 与密钥）、`device-bundle.sha256`、`README.md`（本设备连接单）。完整性校验在内层：bootstrap 的 check/setup 用 device-bundle.sha256 核对内层包，不一致返回 `PACKAGE_HASH_MISMATCH`；Agent 不另算摘要，也不打开内层包。页面上显示的 SHA256 可供员工自行核对，不是必需步骤。
+**两层 ZIP，名字相同：** 员工下载的 `device-bundle*.zip` 是外层 ZIP，里面恰好三个文件：`device-bundle.zip`（内层设备包，含 manifest 与密钥）、`device-bundle.sha256`、`README.md`（本设备连接单）。完整性校验在内层：bootstrap 的 check/setup 用 device-bundle.sha256 核对内层包，不一致返回 `PACKAGE_HASH_MISMATCH`；Agent 不另算摘要，也不打开内层包。
 
 **找到外层 ZIP：** 在下载目录（macOS/Linux `~/Downloads`，Windows `%USERPROFILE%\Downloads`）找最近一天内修改的普通文件 `device-bundle*.zip`（例如 `find ~/Downloads -maxdepth 1 -type f -name 'device-bundle*.zip' -mtime -1`，或 `Get-ChildItem -File -Filter 'device-bundle*.zip'` 加时间筛选）。恰好一个就用它；没有或有多个时才问员工。macOS 终端无权读取“下载”文件夹时，告诉员工这是系统隐私保护，请他在弹窗中允许，或告诉你文件位置。
 
-**检查规则：** 恰好三个条目，名字恰好是上面三个、不重复、都在顶层；每个条目按完整的 32 位外部属性判断，高 16 位的 Unix 类型必须是普通文件（`0100000`）或未设置（`0`，管理员的打包工具写 `0o600 << 16`），且低 16 位不含 DOS 目录（`0x10`）或重解析点（`0x400`）属性；接收目录（macOS/Linux `~/Downloads/employee-workspace/`，Windows `%USERPROFILE%\Downloads\employee-workspace\`）里还没有这三个文件。`zipinfo` 只显示 8 位 DOS 属性、看不到重解析点，所以 macOS/Linux 用 python3 脚本。
+**检查规则：** 恰好三个条目，名字恰好是上面三个、不重复、都在顶层；每个条目按完整的 32 位外部属性判断，高 16 位的 Unix 类型必须是普通文件（`0100000`）或未设置（`0`），且低 16 位不含 DOS 目录（`0x10`）或重解析点（`0x400`）属性；接收目录（macOS/Linux `~/Downloads/employee-workspace/`，Windows `%USERPROFILE%\Downloads\employee-workspace\`）里还没有这三个文件。
 
 macOS / Linux（在源码目录运行，只读）：
 

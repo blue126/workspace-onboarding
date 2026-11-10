@@ -6,7 +6,7 @@ Mosh 用于交互终端，打字响应更快，短暂断网后会话可以恢复
 
 `bash ./bootstrap.sh setup --install-clients` 会安装缺少的 Mosh 客户端（macOS 用 Homebrew，Ubuntu/Debian 用 apt）。
 
-只支持终端模式的 OCI Hub 设备包，VM 主机名总是 `oci-hub-<员工ID>`。setup 会为本设备 SSH 配置增加 `<员工ID>-vm` 别名，并在 `~/.ssh/config` 第一行加入 `Include "<本设备 ssh_config 绝对路径>"`，使系统自带的 `ssh`/`mosh` 直接读取本设备配置（主机校验仍然严格）。`~/.ssh` 不存在时以 700 创建，`~/.ssh/config` 不存在时以 600 创建；已有相同 Include 行时只保留一行并移到第一行，其他内容不改动。Include 在 setup 最后一步写入；`~/.ssh` 不可写，或 `~/.ssh/config` 为符号链接、硬链接或不可写时返回 `SSH_CONFIG_UNSAFE`，`~/.ssh` 不被改动（隧道与本设备配置已完成），请本人决定如何处理。之后在本人交互终端直接运行：
+VM 主机名总是 `oci-hub-<员工ID>`。setup 会为本设备 SSH 配置增加 `<员工ID>-vm` 别名，并在 `~/.ssh/config` 第一行加入 `Include "<本设备 ssh_config 绝对路径>"`，使系统自带的 `ssh`/`mosh` 直接读取本设备配置。`~/.ssh` 不可写，或 `~/.ssh/config` 为符号链接、硬链接或不可写时返回 `SSH_CONFIG_UNSAFE`，`~/.ssh` 不被改动（隧道与本设备配置已完成），请本人决定如何处理。之后在本人交互终端直接运行：
 
 ```bash
 mosh <员工ID>-vm
@@ -15,28 +15,25 @@ ssh <员工ID>-vm
 
 **确认别名生效：** 员工 ID 取自 setup/verify 输出 JSON 的 `vm_hostname`（`oci-hub-<员工ID>`），例如 `employee='alice'; vm_alias="${employee}-vm"; ssh -G "$vm_alias" | grep -E '^(hostname|user) '`。`hostname` 应是 manifest 里的 `ssh_gateway`（VM 在 VPN 内的连接地址），`user` 应是 `employee`；未定义的别名会原样回显为 hostname。登录后在 VM 里运行 `hostname`，应为 `oci-hub-<员工ID>`。
 
-已用 1.0.0 或 1.3.0 完成 setup 的设备，更新源码后对同一设备包重跑 setup 即原地升级本设备 `ssh_config`（1.0.0 同时加入 Include），无需新设备包，不会报 `CONFIG_CONFLICT`。升级前 check、verify、connect、mosh 继续使用旧文件；本人改动过的 `ssh_config` 仍按 `CONFIG_CONFLICT` 处理，不会被覆盖。
+之前已完成 setup 的设备，更新源码后对同一设备包重跑 setup 即原地升级本设备 `ssh_config`（缺少 Include 时一并加入），无需新设备包。
 
-备选：从本机源码目录运行 `bash ./bootstrap.sh mosh`（SSH 用 `bash ./bootstrap.sh connect`）。它用 `ssh -F <本设备 ssh_config>` 连接 alias，保持严格主机校验；VM 运行原生 mosh-server，开放默认 UDP 60000–61000，不需要指定服务端命令或端口。`connect`、`sftp`、`mosh` 连接前先检查本设备隧道（不需要 sudo），隧道没起来时报 `TUNNEL_DOWN` 并给出恢复命令，而不是让 Mosh 报出误导性的连接错误。出现 `MOSH_CLIENT_MISSING` 时重跑 `setup --install-clients`；出现 `INTERACTIVE_TERMINAL_REQUIRED` 时，打开本人的交互终端运行同一命令，不通过管道驱动 Mosh 或记录握手输出。
+备选：从本机源码目录运行 `bash ./bootstrap.sh mosh`（SSH 用 `bash ./bootstrap.sh connect`）。隧道没起来时报 `TUNNEL_DOWN`，见[重启之后](#重启之后)。出现 `MOSH_CLIENT_MISSING` 时重跑 `setup --install-clients`；出现 `INTERACTIVE_TERMINAL_REQUIRED` 时，打开本人的交互终端运行同一命令，不通过管道驱动 Mosh 或记录握手输出。
 
 ### 重启之后
 
-setup 不安装开机自启项（不写 LaunchDaemon/systemd 单元），以免开机时绕过路由与隧道归属检查、影响员工的其他 VPN。重启后：
+重启后：
 
-1. 运行 `bash ./bootstrap.sh connect` 或 `bash ./bootstrap.sh mosh`；隧道未运行时得到 `TUNNEL_DOWN`，脚本没有做任何改动。
+1. 运行 `bash ./bootstrap.sh connect` 或 `bash ./bootstrap.sh mosh`；隧道未运行时得到 `TUNNEL_DOWN`。
 2. 本人在交互终端运行 `bash ./bootstrap.sh setup`（曾用 `--bundle`/`--sha256`/`--state-root` 时带同样参数），输入本人 sudo 密码，得到 `CONFIGURED`。
 3. 再运行 `mosh <员工ID>-vm` 或 `bash ./bootstrap.sh mosh`。
 
-系统自带的 `mosh <员工ID>-vm`/`ssh <员工ID>-vm` 不经过 bootstrap，隧道未运行时只会超时；遇到时按上面第 1 步确认。需要断开时仍用 `bash ./bootstrap.sh disconnect`，它只停止属于本设备的隧道。
+系统自带的 `mosh <员工ID>-vm`/`ssh <员工ID>-vm` 不经过 bootstrap，隧道未运行时只会超时；遇到时按上面第 1 步确认。
 
 ### 字符集（locale）
 
-macOS 终端默认导出 `LC_CTYPE=UTF-8`。这个名字在 Linux 上不存在：系统 SSH 通过 `SendEnv LC_*` 把它带到 VM，Mosh 也把本机的 `LANG`/`LC_*` 交给 mosh-server，结果 mosh-server 报 `needs a UTF-8 native locale` 后退出。客户端兜底如下，VM 上只有 `C.UTF-8` 也能用：
+macOS 终端默认导出 `LC_CTYPE=UTF-8`，Linux 没有这个 locale，传到 VM 后 mosh-server 报 `needs a UTF-8 native locale` 并退出。对同一设备包重跑 `bash ./bootstrap.sh setup` 即可：本设备 `ssh_config` 会加上 `SetEnv LANG=C.UTF-8 LC_ALL=C.UTF-8`，`ssh`/`mosh <员工ID>-vm` 和 bootstrap 入口都生效。`bash ./bootstrap.sh mosh` 报 `LOCALE_UNAVAILABLE` 时，改用 `bash ./bootstrap.sh connect` 并告诉管理员。
 
-- 本设备 `ssh_config` 带 `SetEnv LANG=C.UTF-8 LC_ALL=C.UTF-8`。OpenSSH 在 `SendEnv` 之后发送 `SetEnv`，VM 的 sshd 接受这些变量时（Ubuntu 默认 `AcceptEnv LANG LC_*`）收到的是 `C.UTF-8`，mosh-server 用它启动，不再采用本机传来的值；对 `ssh`/`mosh <员工ID>-vm` 和 bootstrap 入口都生效。
-- `bash ./bootstrap.sh mosh` 启动前清除所有 `LC_*`/`LANGUAGE`，只设置 `LANG=C.UTF-8`。本机没有 `C.UTF-8` 时报 `LOCALE_UNAVAILABLE`，改用 `bash ./bootstrap.sh connect` 并告诉管理员。
-
-已经装过的设备对同一设备包重跑 `bash ./bootstrap.sh setup` 即可升级。想在 VM 里用中文等其他 locale（需 VM 已生成该 locale），由本人在 VM 的 shell 配置里设置 `LC_ALL`，不要修改本机的系统 SSH 配置。
+想在 VM 里用中文等其他 locale（需 VM 已生成该 locale），由本人在 VM 的 shell 配置里设置 `LC_ALL`。
 
 ## Windows
 

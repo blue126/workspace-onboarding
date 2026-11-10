@@ -48,7 +48,3 @@ Linux 由 Agent 创建本人可输入密码的交互会话并完成 setup、veri
 - macOS：setup 用 Homebrew 安装 `wireguard-tools` 与 `mosh`。缺少 Homebrew 时（`HOMEBREW_REQUIRED`），请员工在自己的终端运行官方一行命令 `/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"`，按提示输入本机密码。Git 和 python3 随 Xcode 命令行工具提供，首次使用时系统会弹窗安装，请员工点「安装」。
 - Linux：setup 用 apt 按需安装 WireGuard（VPN）、OpenSSH 客户端（登录 VM）、jq（读取设备配置）、iproute2（检查路由）、unzip（解开设备包）和 mosh。Git、python3 缺少时用 `sudo apt-get install -y git python3 unzip`。
 - Windows：setup 安装 OpenSSH 客户端和官方 WireGuard；Git 缺少时用 `winget install --id Git.Git -e`。
-
-sudo 通常只需输入一次：它会在几分钟内记住授权（macOS 默认约 5 分钟）。
-
-这里授权的是员工本机建立 VPN 所需的系统操作，与 VM 内 employee 的 sudo 权限分别处理。
