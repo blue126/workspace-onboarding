@@ -8,7 +8,7 @@ Agent 不代为登录，不索取验证码、Cookie 或令牌。下载完成后�
 
 ## 校验与解开
 
-**两层 ZIP，名字相同：** 员工下载的 `device-bundle*.zip` 是外层 ZIP，里面恰好三个文件：`device-bundle.zip`（内层设备包，含 manifest 与密钥）、`device-bundle.sha256`、`README.md`（本设备连接单）。完整性校验在内层：bootstrap 的 check/setup 用 device-bundle.sha256 核对内层包，不一致返回 `PACKAGE_HASH_MISMATCH`；Agent 不另算摘要，也不打开内层包。页面上显示的 SHA256 可供员工自行核对，不是必需步骤。
+**两层 ZIP，名字相同：** 员工下载的 `device-bundle*.zip` 是外层 ZIP，里面恰好三个文件：`device-bundle.zip`（内层设备包，含 manifest 与密钥）、`device-bundle.sha256`、`README.md`（本设备连接单）。完整性校验在内层：bootstrap 的 check/setup 用 device-bundle.sha256 核对内层包，不一致返回 `PACKAGE_HASH_MISMATCH`；Agent 不另算摘要，也不打开内层包。
 
 **找到外层 ZIP：** 在下载目录（macOS/Linux `~/Downloads`，Windows `%USERPROFILE%\Downloads`）找最近一天内修改的普通文件 `device-bundle*.zip`（例如 `find ~/Downloads -maxdepth 1 -type f -name 'device-bundle*.zip' -mtime -1`，或 `Get-ChildItem -File -Filter 'device-bundle*.zip'` 加时间筛选）。恰好一个就用它；没有或有多个时才问员工。macOS 终端无权读取“下载”文件夹时，告诉员工这是系统隐私保护，请他在弹窗中允许，或告诉你文件位置。
 

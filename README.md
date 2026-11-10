@@ -77,7 +77,6 @@
 
 - **需求：** 员工在 `mosh <员工ID>-vm` 会话里运行 `workspace-login`，它在 VM 里启动图形 Firefox，并显示 VM 桌面的地址；员工在**本机**浏览器打开**这个地址**（只能经 VPN 访问），在画面里的 VM Firefox 完成 Claude 登录；页面给出授权码时回 mosh 终端粘贴。你不要自己把地址交给员工：它与 verify 输出的 `desktop_url` 相同，`desktop_url` 只供你检查。
 - **登录方式：** 用 Google 或 Apple 账号的，直接在 VM Firefox 里完成。用邮箱的，Anthropic 会发一封登录邮件：请员工**不要点击**邮件里的「Sign In」按钮（会在本机浏览器登录），而是右键复制链接地址，粘贴到 VM Firefox 的地址栏打开；无法直接粘贴时，先在 VM Firefox 地址栏点一下，再用同一网页里的「需要粘贴文本到远程浏览器？」粘贴。
-- **不需要密码：** VM 桌面不要求输入 VNC 或网页密码（由 VPN 和证书 pin 保护）；出现密码框就停止并联系管理员。
 - **为什么：** Claude 登录必须在 VM 里完成，账号凭据不落到本机；该地址只在 VPN 内可达，证书是这台 VM 自签的，浏览器会提示"不安全"。
 - **证书（由你核对，不交给员工）：** 只有 verify 输出 `desktop_tls=passed` 才让员工继续：这表示 verify 已用设备包里的 pin 核对过该地址的证书。此时告诉员工浏览器的证书提示是正常的，可以继续访问；不要请员工查看或比对指纹。`desktop_tls` 不是 `passed` 或出现 `TLS_PIN_FAILED` 时停止，请员工联系管理员，不要让员工打开该地址。
 - **验收：** 员工再运行一次 verify，结果 `CONNECTION_VERIFIED`（`claude_auth=passed`）。
