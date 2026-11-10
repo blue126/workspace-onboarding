@@ -261,14 +261,22 @@ elif name=="ifconfig":
  if args==["-a"]:
   print("inet "+m["wireguard_address"].split("/")[0] if os.environ.get("ADDRESS_CONFLICT") else "inet 127.0.0.1")
  else:
-  assert args==["utun9"],args
-  print("inet "+m["wireguard_address"].split("/")[0]+" netmask 0xffffffff")
+  assert len(args)==1 and args[0].startswith("utun"),args
+  if args[0]=="utun9":print("inet "+m["wireguard_address"].split("/")[0]+" netmask 0xffffffff")
+  else:print("inet 10.200.0.2 netmask 0xffffffff")
 elif name=="route":
  assert args==["-n","get",m["ssh_gateway"]],args
- print("destination: "+(m["ssh_gateway"] if os.environ.get("ROUTE_CONFLICT") else "default"))
- print("interface: "+("utun8" if os.environ.get("ROUTE_CONFLICT") else "en0"))
+ if os.environ.get("ROUTE_CONFLICT"):print("destination: "+m["ssh_gateway"]);print("interface: utun8")
+ elif (p/"tunnel-active").exists():print("destination: "+m["ssh_gateway"]);print("interface: utun9")
+ else:print("destination: default");print("interface: en0")
 elif name=="ip":
- if args[:4]==["-o","-4","addr","show"]:print("2: "+m["tunnel_name"]+" inet "+m["wireguard_address"])
+ if args[:4]==["-o","-4","addr","show"]:
+  if args[-1]==m["tunnel_name"]:print("2: "+m["tunnel_name"]+" inet "+m["wireguard_address"])
+ elif args[:4]==["-o","-4","route","get"]:
+  assert args[4:]==[m["ssh_gateway"]],args
+  if os.environ.get("ROUTE_CONFLICT"):print(m["ssh_gateway"]+" dev other-vpn src 10.200.0.2")
+  elif (p/"tunnel-active").exists():print(m["ssh_gateway"]+" dev "+m["tunnel_name"]+" src "+m["wireguard_address"].split("/")[0])
+  else:print(m["ssh_gateway"]+" via 192.0.2.1 dev eth0 src 192.0.2.10")
  elif args[:4]==["-4","route","show","match"]:
   print("10.77.0.0/24 dev other-vpn" if os.environ.get("ROUTE_CONFLICT") else "default via 192.0.2.1 dev eth0")
  else:raise AssertionError(args)
@@ -672,6 +680,7 @@ elif name=="ip":
         self.mosh_manifest();self.setup()
         p=self.bin/'mosh';p.write_text('#!/usr/bin/env python3\nimport json,os,pathlib,sys\n(pathlib.Path(os.environ["FIXTURE"])/"mosh-args.json").write_text(json.dumps(sys.argv[1:]))\n');p.chmod(0o755)
         p=self.bin/'mosh-client';p.write_text('#!/bin/sh\nexit 0\n');p.chmod(0o755)
+        (self.path/'tunnel-active').touch()
         master,slave=pty.openpty()
         try:
             result=subprocess.run(self.command('mosh'),env=self.env,stdin=slave,stdout=slave,stderr=subprocess.PIPE,text=True,timeout=20)
@@ -693,6 +702,128 @@ elif name=="ip":
         jsonschema.validate(self.manifest,schema)
         example=json.loads((ROOT/'examples/bundle-manifest.oci-hub-mosh.example.json').read_text())
         jsonschema.validate(example,schema)
+
+    def fake_mosh(self):
+        # Records arguments and the locale it was started with; never connects.
+        p=self.bin/'mosh';p.write_text('#!/usr/bin/env python3\nimport json,os,pathlib,sys\n'
+            'env={k:v for k,v in os.environ.items() if k.startswith(("LC_","LANG"))}\n'
+            '(pathlib.Path(os.environ["FIXTURE"])/"mosh-run.json").write_text(json.dumps({"args":sys.argv[1:],"env":env}))\n');p.chmod(0o755)
+        p=self.bin/'mosh-client';p.write_text('#!/bin/sh\nexit 0\n');p.chmod(0o755)
+
+    def run_in_pty(self, action):
+        import pty
+        master,slave=pty.openpty()
+        try:
+            return subprocess.run(self.command(action),env=self.env,stdin=slave,stdout=slave,stderr=subprocess.PIPE,text=True,timeout=20)
+        finally:os.close(slave);os.close(master)
+
+    def commands(self):
+        log=self.path/'commands.jsonl'
+        return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+    def network_changes(self):
+        # Readiness probes (--version/--help) are fine; anything else touches the network.
+        return [[name,args] for name,args in self.commands()
+                if name in ('sudo','ssh','sftp') or (name in ('wg','wg-quick') and args not in (['--version'],['--help']))]
+
+    @unittest.skipIf(WINDOWS,'POSIX interactive terminal fixture')
+    def test_mosh_sends_only_c_utf8_locale(self):
+        self.setup();self.fake_mosh();(self.path/'tunnel-active').touch()
+        # macOS Terminal defaults plus values the VM does not have.
+        self.env.update(LC_CTYPE='UTF-8',LANG='zh_CN.UTF-8',LC_ALL='en_US.UTF-8',LC_MESSAGES='UTF-8',LANGUAGE='zh_CN')
+        result=self.run_in_pty('mosh')
+        self.assertEqual(result.returncode,0,result.stderr)
+        run=json.loads((self.path/'mosh-run.json').read_text())
+        self.assertEqual(run['env'],{'LANG':'C.UTF-8'})
+        self.assertNotIn('LANGUAGE',run['env'])
+        self.assertEqual(run['args'][-1],self.manifest['ssh_alias'])
+
+    @unittest.skipIf(WINDOWS,'POSIX interactive terminal fixture')
+    def test_mosh_without_local_c_utf8_stops_before_connecting(self):
+        self.setup();self.fake_mosh();(self.path/'tunnel-active').touch()
+        p=self.bin/'locale';p.write_text('#!/bin/sh\nprintf "C\\nPOSIX\\nen_US.ISO8859-1\\n"\n');p.chmod(0o755)
+        result=self.run_in_pty('mosh')
+        self.assertEqual(result.returncode,2,result.stderr)
+        self.assertIn('C.UTF-8',result.stderr)
+        self.assertFalse((self.path/'mosh-run.json').exists())
+
+    @unittest.skipIf(WINDOWS,'Unix CLI route/tunnel behavior')
+    def test_tunnel_down_after_reboot_is_reported_without_sudo(self):
+        # Setup once activated the tunnel; a reboot removed it (no tunnel-active).
+        self.setup();self.fake_mosh()
+        (self.path/'commands.jsonl').unlink(missing_ok=True)
+        for action in ('connect','sftp'):
+            run=subprocess.run(self.command(action),env=self.env,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=30)
+            self.assertEqual(run.returncode,3,run.stderr)
+            self.assertEqual(json.loads(run.stdout.splitlines()[-1])['code'],'TUNNEL_DOWN')
+            self.assertIn('bash ./bootstrap.sh setup',run.stderr)
+        result=self.run_in_pty('mosh')
+        self.assertEqual(result.returncode,3,result.stderr)
+        self.assertIn('bash ./bootstrap.sh setup',result.stderr)
+        self.assertFalse((self.path/'mosh-run.json').exists())
+        # No elevation, no tunnel change and no connection attempt.
+        self.assertEqual(self.network_changes(),[])
+        # The printed recovery command restores only this device's tunnel.
+        self.call('setup',code='CONFIGURED')
+        self.assertTrue((self.path/'tunnel-active').exists())
+        self.assertEqual(self.run_in_pty('mosh').returncode,0)
+
+    @unittest.skipIf(WINDOWS,'Unix CLI route/tunnel behavior')
+    def test_connect_with_live_tunnel_reaches_ssh(self):
+        self.setup();(self.path/'tunnel-active').touch();(self.path/'commands.jsonl').unlink(missing_ok=True)
+        subprocess.run(self.command('connect'),env=self.env,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=30)
+        calls=self.commands()
+        self.assertIn('ssh',[name for name,_ in calls])
+        self.assertNotIn('sudo',[name for name,_ in calls])
+        self.assertFalse([1 for name,args in calls if name=='wg-quick' and args!=['--help']])
+
+    @unittest.skipIf(WINDOWS,'Unix CLI route/tunnel behavior')
+    def test_connect_through_another_vpn_route_is_a_conflict(self):
+        self.setup();self.env['ROUTE_CONFLICT']='1';(self.path/'commands.jsonl').unlink(missing_ok=True)
+        run=subprocess.run(self.command('connect'),env=self.env,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=30)
+        self.assertEqual(json.loads(run.stdout.splitlines()[-1])['code'],'ROUTE_CONFLICT')
+        self.assertEqual(self.network_changes(),[])
+
+    @unittest.skipIf(WINDOWS,'Unix CLI route/tunnel behavior')
+    def test_verify_distinguishes_down_from_foreign_tunnel(self):
+        self.setup()
+        _,r=self.call('verify',code='TUNNEL_DOWN');self.assertEqual(r['sftp_roundtrip'],'pending')
+        (self.path/'tunnel-active').touch();self.env['WRONG_TUNNEL']='1'
+        self.call('verify',code='TUNNEL_CONFLICT')
+        # disconnect still refuses to stop a tunnel it does not own.
+        self.call('disconnect',code='TUNNEL_CONFLICT')
+        self.assertTrue((self.path/'tunnel-active').exists())
+
+    @unittest.skipIf(WINDOWS,'Unix ssh_config Include')
+    def test_ssh_config_sets_a_locale_the_vm_has(self):
+        self.setup()
+        config=(self.native_state()/'ssh_config').read_text()
+        self.assertIn('    SetEnv LANG=C.UTF-8 LC_ALL=C.UTF-8\n',config)
+        ssh=shutil.which('ssh',path=os.environ['PATH'])
+        run=subprocess.run([ssh,'-G','-F',str(self.user_config()),'fixture-vm'],capture_output=True,text=True,timeout=20)
+        self.assertEqual(run.returncode,0,run.stderr)
+        setenv=[v for line in run.stdout.splitlines() if line.startswith('setenv ') for v in line.split()[1:]]
+        self.assertEqual(sorted(setenv),['LANG=C.UTF-8','LC_ALL=C.UTF-8'])
+
+    @unittest.skipIf(WINDOWS,'Unix ssh_config Include')
+    def test_1_3_0_ssh_config_upgrades_to_setenv_without_conflict(self):
+        self.setup()
+        installed=self.native_state()/'ssh_config';current=installed.read_text()
+        previous=current.replace('    SetEnv LANG=C.UTF-8 LC_ALL=C.UTF-8\n','')
+        self.assertNotEqual(previous,current)
+        installed.write_text(previous);installed.chmod(0o600)
+        user=self.user_config().read_bytes()
+        (self.path/'tunnel-active').touch()
+        self.call('check',code='CHECKED')
+        self.call('verify',code='CONNECTION_VERIFIED')
+        self.assertEqual(installed.read_text(),previous)
+        self.call('setup',code='CONFIGURED')
+        self.assertEqual(installed.read_text(),current)
+        self.assertEqual(stat.S_IMODE(installed.stat().st_mode),0o600)
+        self.assertEqual(self.user_config().read_bytes(),user)
+        # A hand edit of the SetEnv line is not an earlier release: still a conflict.
+        installed.write_text(current.replace('LC_ALL=C.UTF-8','LC_ALL=zh_CN.UTF-8'))
+        self.call('setup','--no-activate',code='CONFIG_CONFLICT')
 
     def native_state(self):
         return self.state/'oci-hub'/self.manifest['device_id']
@@ -734,7 +865,7 @@ elif name=="ip":
         self.hub_manifest();self.setup()
         installed=self.native_state()/'ssh_config'
         current=installed.read_text()
-        legacy='Host oci-hub-'+self.manifest['device_id']+'\n'+current.split('\n',1)[1]
+        legacy='Host oci-hub-'+self.manifest['device_id']+'\n'+current.split('\n',1)[1].replace('    SetEnv LANG=C.UTF-8 LC_ALL=C.UTF-8\n','')
         installed.write_text(legacy);self.user_config().unlink()
         # Other commands keep using the 1.0.0 config: a full verify passes against it unchanged.
         (self.path/'tunnel-active').touch()

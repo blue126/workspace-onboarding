@@ -291,10 +291,7 @@ Endpoint = $endpoint:$wg_port
 AllowedIPs = $gateway/32
 PersistentKeepalive = $wg_keepalive
 EOF
-    {
-        if [[ -n "$vm_alias" ]]; then printf 'Host %s %s\n' "$ssh_alias" "$vm_alias"
-        else printf 'Host %s\n' "$ssh_alias"; fi
-        cat <<EOF
+    cat > "$stage/ssh_config.body" <<EOF
     HostName $gateway
     User $ssh_user
     Port 22
@@ -319,9 +316,19 @@ EOF
     ServerAliveInterval 15
     ServerAliveCountMax 3
 EOF
+    {
+        if [[ -n "$vm_alias" ]]; then printf 'Host %s %s\n' "$ssh_alias" "$vm_alias"
+        else printf 'Host %s\n' "$ssh_alias"; fi
+        cat "$stage/ssh_config.body"
+        # macOS Terminal exports LC_CTYPE=UTF-8, which Linux does not know; the system
+        # ssh_config sends it (SendEnv LC_*) and mosh-server then exits on the VM.
+        # SetEnv is sent after SendEnv, so the VM always gets a locale it has.
+        printf '    SetEnv LANG=C.UTF-8 LC_ALL=C.UTF-8\n'
     } > "$stage/ssh_config"
-    # Release 1.0.0 output, used only to recognize an installation to upgrade.
-    { printf 'Host %s\n' "$ssh_alias"; tail -n +2 "$stage/ssh_config"; } > "$stage/ssh_config.v1"
+    # Earlier releases' output, used only to recognize an installation to upgrade:
+    # 1.0.0 (no <employee>-vm alias) and 1.3.0 (alias, no SetEnv).
+    { printf 'Host %s\n' "$ssh_alias"; cat "$stage/ssh_config.body"; } > "$stage/ssh_config.v1"
+    { head -n 1 "$stage/ssh_config"; cat "$stage/ssh_config.body"; } > "$stage/ssh_config.v13"
     printf '%s\n' "$expected_sha" > "$stage/bundle.sha256"
     chmod 600 "$stage/"*
 }
@@ -332,8 +339,9 @@ require_installed() {
     for file in client-key known_hosts manifest.json wg.key ssh_config "$tunnel.conf" bundle.sha256; do
         [[ -f "$state/$file" && ! -L "$state/$file" ]] || fail CONFIG_CONFLICT "Installed configuration differs; nothing overwritten."
         cmp -s "$stage/$file" "$state/$file" && continue
-        # The 1.0.0 ssh_config stays usable; only setup upgrades it.
-        if [[ "$file" == ssh_config ]] && cmp -s "$stage/ssh_config.v1" "$state/ssh_config"; then
+        # An earlier release's ssh_config stays usable; only setup upgrades it.
+        if [[ "$file" == ssh_config ]] &&
+            { cmp -s "$stage/ssh_config.v1" "$state/ssh_config" || cmp -s "$stage/ssh_config.v13" "$state/ssh_config"; }; then
             ssh_config_legacy=true
             continue
         fi
@@ -468,6 +476,37 @@ owned_tunnel() {
     [[ "$actual" == "$client_public" && "$actual_peer" == "$peer" &&
        "$allowed" == "$peer"$'\t'"$gateway/32" && "$current_address" == "$address" ]]
 }
+# Unprivileged read of the live route to the gateway: connect/sftp/mosh never call sudo.
+# up: the route leaves through an interface holding this device's /32 address;
+# conflict: another interface or network covers the gateway; down: nothing does.
+tunnel_route_state() {
+    local route_info destination iface dev
+    if [[ "$platform" == macos ]]; then
+        route_info="$(route -n get "$gateway" 2>/dev/null)" || { printf 'down\n'; return 0; }
+        destination="$(printf '%s\n' "$route_info" | awk '$1=="destination:" {print $2}')"
+        iface="$(printf '%s\n' "$route_info" | awk '$1=="interface:" {print $2}')"
+        if [[ "$destination" == default || -z "$iface" ]]; then printf 'down\n'
+        elif [[ "$iface" =~ ^utun[0-9]+$ ]] &&
+            ifconfig "$iface" 2>/dev/null | awk -v target="${address%/32}" '$1=="inet" && $2==target {found=1} END {exit !found}'; then
+            printf 'up\n'
+        else printf 'conflict\n'; fi
+    else
+        dev="$(ip -o -4 route get "$gateway" 2>/dev/null | awk '{for (i=1; i<NF; i++) if ($i=="dev") {print $(i+1); exit}}')"
+        if [[ "$dev" == "$tunnel" && "$(ip -o -4 addr show dev "$tunnel" 2>/dev/null | awk '{print $4}')" == "$address" ]]; then
+            printf 'up\n'
+        elif ip -4 route show match "$gateway" 2>/dev/null | awk '$1!="default" {bad=1} END {exit !bad}'; then
+            printf 'conflict\n'
+        else printf 'down\n'; fi
+    fi
+}
+tunnel_down_message="本设备 WireGuard 隧道未运行（Mac 重启后不会自动恢复）。请本人在交互终端运行 bash ./bootstrap.sh setup（需本人 sudo 授权；曾用 --bundle/--sha256/--state-root 时带同样参数）重新启动本设备隧道，然后重试；不要停用其他 VPN。"
+require_tunnel_up() {
+    case "$(tunnel_route_state)" in
+        up) ;;
+        conflict) fail ROUTE_CONFLICT "到入口的路由不经过本设备隧道；未修改任何 VPN。见 docs/troubleshooting.md。" ;;
+        *) fail TUNNEL_DOWN "$tunnel_down_message" 3 ;;
+    esac
+}
 check_new_tunnel_route() {
     local conflicting route_info destination
     if [[ "$platform" == macos ]]; then
@@ -548,6 +587,17 @@ case "$action" in
         command -v mosh >/dev/null && command -v mosh-client >/dev/null || fail MOSH_CLIENT_MISSING "Install Mosh in this terminal environment with user approval; see docs/mosh.md."
         # Mosh is interactive: never run it through a pipe or record its handshake key.
         [[ -t 0 && -t 1 ]] || fail INTERACTIVE_TERMINAL_REQUIRED "Run this same mosh command in the user's interactive terminal."
+        require_tunnel_up
+        # Mosh hands every LANG/LC_* value to mosh-server (-l NAME=VALUE). macOS-only
+        # values such as LC_CTYPE=UTF-8 (and this script's own LC_ALL=C) make one side
+        # refuse to start; C.UTF-8 exists on macOS, Debian/Ubuntu and the VM.
+        # grep reads the whole list: -q would stop early and pipefail would see SIGPIPE.
+        locale -a 2>/dev/null | grep -Eix 'c\.utf-?8' >/dev/null ||
+            fail LOCALE_UNAVAILABLE "本机没有 C.UTF-8 locale，Mosh 无法启动；改用 bash ./bootstrap.sh connect，并把此代码报告给管理员。"
+        for variable in $(compgen -e); do
+            case "$variable" in LC_*|LANGUAGE) unset "$variable" ;; esac
+        done
+        export LANG=C.UTF-8
         config="$state/ssh_config"
         cleanup
         stage=""
@@ -558,6 +608,7 @@ case "$action" in
         ;;
     connect|sftp)
         require_installed
+        require_tunnel_up
         cleanup
         stage=""
         if [[ "$action" == connect ]]; then exec ssh -F "$state/ssh_config" -tt "$ssh_alias"
@@ -566,6 +617,7 @@ case "$action" in
         require_installed
         $client_ready || fail DEPENDENCY_MISSING "缺少 WireGuard CLI。"
         require_tunnel_admin
+        resolve_tunnel_interface || fail TUNNEL_DOWN "$tunnel_down_message" 3
         owned_tunnel || fail TUNNEL_CONFLICT "Live tunnel identity or routing mismatch."
         nonce="$(od -An -N12 -tx1 /dev/urandom | tr -d ' \n')"
         prefix="WS_${nonce}"
