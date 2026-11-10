@@ -21,6 +21,7 @@
 | DEPENDENCY_MISSING | 3（check）或 2 | 缺本机依赖；按平台指引安装，再执行原命令 |
 | CONFIGURED | 0 | 本机配置已完成；继续 verify，不代表远端已验证 |
 | NEEDS_ADMIN / HOMEBREW_REQUIRED | 2 | 完成对应系统授权或依赖安装，再执行同一命令 |
+| TUNNEL_DOWN | 3 | 本设备隧道未运行（常见于 Mac 重启后）；由本人运行 `bash ./bootstrap.sh setup` 恢复，再执行原命令 |
 | CLAUDE_AUTH_USER_PENDING | 0 | VM 浏览器证书 pin、SSH 身份、VM 归属、sudo、CLI、SFTP、握手通过；个人 Claude 授权尚待本人完成 |
 | CONNECTION_VERIFIED | 0 | 上述连接检查和 Claude 订阅登录状态通过；不代表真实项目任务已验收 |
 | 其他错误码 | 非 0 | 停止，按故障处理说明反馈；不要改条件使其通过 |
