@@ -127,6 +127,11 @@ fi
 entries="$(unzip -Z -1 "$bundle" 2>/dev/null)" || fail PACKAGE_INVALID "无法读取设备包目录。"
 [[ "$(printf '%s\n' "$entries" | sort)" == "$(printf '%s\n' client-key known_hosts manifest.json wg.key | sort)" ]] ||
     fail PACKAGE_UNSAFE "设备包仅允许四个指定数据文件，不允许路径、重复项或脚本。"
+# Reject links, directories and devices from the archive metadata, before extraction:
+# some unzip builds refuse to extract a symlink, others create it.
+# A regular file shows "-", or "?" when the entry carries no type bits.
+types="$(unzip -Z "$bundle" 2>/dev/null | awk '$NF ~ /^(client-key|known_hosts|manifest.json|wg.key)$/ {n++; if (substr($1,1,1) !~ /^[-?]$/) bad=1} END {print (n==4 && !bad) ? "ok" : "bad"}')"
+[[ "$types" == ok ]] || fail PACKAGE_UNSAFE "设备包不允许链接或特殊文件。"
 sizes="$(unzip -l "$bundle" | awk '$4 ~ /^(client-key|known_hosts|manifest.json|wg.key)$/ {s += $1; if ($1 > 65536) bad=1; n++} END {if(n!=4 || bad || s>131072) print "bad"; else print "ok"}')"
 [[ "$sizes" == ok ]] || fail PACKAGE_TOO_LARGE "设备包解压大小超限。"
 stage="$(mktemp -d "${TMPDIR:-/tmp}/workspace-onboarding.XXXXXXXX")"

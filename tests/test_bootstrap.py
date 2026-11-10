@@ -431,7 +431,9 @@ elif name=="ip":
                     z.writestr(info,"/etc/passwd")
                 else:z.writestr(name,value)
         self.digest=hashlib.sha256(self.package.read_bytes()).hexdigest()
+        # Rejected from archive metadata, whether or not this unzip would extract the link.
         self.call("setup",code="PACKAGE_UNSAFE")
+        self.assertFalse(self.state.exists())
 
     @unittest.skipIf(WINDOWS, "Unix command transport fixture")
     def test_verify_pty_sftp_and_redaction(self):
