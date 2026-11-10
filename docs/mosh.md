@@ -6,7 +6,7 @@ Mosh 用于交互终端，打字响应更快，短暂断网后会话可以恢复
 
 `bash ./bootstrap.sh setup --install-clients` 会安装缺少的 Mosh 客户端（macOS 用 Homebrew，Ubuntu/Debian 用 apt）。
 
-只支持终端模式的 OCI Hub 设备包，VM 主机名总是 `oci-hub-<员工ID>`。setup 会为本设备 SSH 配置增加 `<员工ID>-vm` 别名，并在 `~/.ssh/config` 第一行加入 `Include "<本设备 ssh_config 绝对路径>"`，使系统自带的 `ssh`/`mosh` 直接读取本设备配置（主机校验仍然严格）。`~/.ssh` 不存在时以 700 创建，`~/.ssh/config` 不存在时以 600 创建；已有相同 Include 行时只保留一行并移到第一行，其他内容不改动。Include 在 setup 最后一步写入；`~/.ssh` 不可写，或 `~/.ssh/config` 为符号链接、硬链接或不可写时返回 `SSH_CONFIG_UNSAFE`，`~/.ssh` 不被改动（隧道与本设备配置已完成），请本人决定如何处理。之后在本人交互终端直接运行：
+VM 主机名总是 `oci-hub-<员工ID>`。setup 会为本设备 SSH 配置增加 `<员工ID>-vm` 别名，并在 `~/.ssh/config` 第一行加入 `Include "<本设备 ssh_config 绝对路径>"`，使系统自带的 `ssh`/`mosh` 直接读取本设备配置（主机校验仍然严格）。`~/.ssh` 不存在时以 700 创建，`~/.ssh/config` 不存在时以 600 创建；已有相同 Include 行时只保留一行并移到第一行，其他内容不改动。Include 在 setup 最后一步写入；`~/.ssh` 不可写，或 `~/.ssh/config` 为符号链接、硬链接或不可写时返回 `SSH_CONFIG_UNSAFE`，`~/.ssh` 不被改动（隧道与本设备配置已完成），请本人决定如何处理。之后在本人交互终端直接运行：
 
 ```bash
 mosh <员工ID>-vm
@@ -15,7 +15,7 @@ ssh <员工ID>-vm
 
 **确认别名生效：** 员工 ID 取自 setup/verify 输出 JSON 的 `vm_hostname`（`oci-hub-<员工ID>`），例如 `employee='alice'; vm_alias="${employee}-vm"; ssh -G "$vm_alias" | grep -E '^(hostname|user) '`。`hostname` 应是 manifest 里的 `ssh_gateway`（VM 在 VPN 内的连接地址），`user` 应是 `employee`；未定义的别名会原样回显为 hostname。登录后在 VM 里运行 `hostname`，应为 `oci-hub-<员工ID>`。
 
-已用 1.0.0 或 1.3.0 完成 setup 的设备，更新源码后对同一设备包重跑 setup 即原地升级本设备 `ssh_config`（1.0.0 同时加入 Include），无需新设备包，不会报 `CONFIG_CONFLICT`。升级前 check、verify、connect、mosh 继续使用旧文件；本人改动过的 `ssh_config` 仍按 `CONFIG_CONFLICT` 处理，不会被覆盖。
+之前已完成 setup 的设备，更新源码后对同一设备包重跑 setup 即原地升级本设备 `ssh_config`（缺少 Include 时一并加入），无需新设备包，不会报 `CONFIG_CONFLICT`。升级前 check、verify、connect、mosh 继续使用旧文件；本人改动过的 `ssh_config` 仍按 `CONFIG_CONFLICT` 处理，不会被覆盖。
 
 备选：从本机源码目录运行 `bash ./bootstrap.sh mosh`（SSH 用 `bash ./bootstrap.sh connect`）。它用 `ssh -F <本设备 ssh_config>` 连接 alias，保持严格主机校验；VM 运行原生 mosh-server，开放默认 UDP 60000–61000，不需要指定服务端命令或端口。`connect`、`sftp`、`mosh` 连接前先检查本设备隧道（不需要 sudo），隧道没起来时报 `TUNNEL_DOWN` 并给出恢复命令，而不是让 Mosh 报出误导性的连接错误。出现 `MOSH_CLIENT_MISSING` 时重跑 `setup --install-clients`；出现 `INTERACTIVE_TERMINAL_REQUIRED` 时，打开本人的交互终端运行同一命令，不通过管道驱动 Mosh 或记录握手输出。
 

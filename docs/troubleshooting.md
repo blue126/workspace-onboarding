@@ -6,7 +6,7 @@
 | --- | --- |
 | PACKAGE_MISSING / PACKAGE_HASH_MISMATCH | 项目不完整或数据包被改变；从获授权仓库取得同一发布版本，联系管理员；不要自行改 hash |
 | PACKAGE_UNSAFE / MANIFEST_INVALID | 包结构、字段或版本不符合约定；由管理员重新生成，不能运行包内脚本 |
-| MANIFEST_UNSUPPORTED | 旧版 v1、只有终端或只有桌面的设备包，已停用；只支持统一格式（终端 + VM 浏览器入口）的 OCI Hub 设备包。请员工联系管理员换发新包，不要修改 manifest |
+| MANIFEST_UNSUPPORTED | 设备包格式已停用。请员工联系管理员换发新包，不要修改 manifest |
 | TLS_PIN_FAILED | VM 浏览器入口（`desktop_url`）的证书与设备包 pin 不符或无法握手；不要打开或信任该地址，不要点浏览器的"继续访问"。确认 VPN 已连接后仍失败则停止，联系管理员 |
 | DEPENDENCY_MISSING | 缺本机客户端；获准后 setup 加 InstallClients／install-clients |
 | NEEDS_ADMIN | 尚未取得系统授权，可能缺少交互输入、授权取消或 sudo 被拒绝；不是单指密码未输入。按[系统授权](system-authorization.md)处理，工具明确拒绝时由本人运行 Agent 给出的 setup→verify 命令；不依赖另一终端 sudo -v，不发送密码 |
@@ -15,10 +15,10 @@
 | REISSUE_READY | 本机装过同一设备的旧包（管理员换发）。运行 setup：它在本人授权下停掉旧包的隧道，把旧配置移到 `.archive/<设备>-<时间>/`，再装新包；不删除任何文件 |
 | STATE_ROOT_CONFLICT / CONFIG_CONFLICT | 现有目录／配置归属或内容不匹配（例如同一个包装好后又被改过）；保留原文件，联系管理员，不覆盖 |
 | CONFIG_REPLACE_FAILED | 换发时旧配置没能归档；什么都没替换，报告此代码给管理员 |
-| CONFIG_UPGRADE_FAILED | 无法把旧版（1.0.0 或 1.3.0）的本设备 ssh_config 原地升级（多为状态目录不可写或磁盘已满）；原文件保留，旧命令照常可用。核对状态目录归属和权限后重跑 setup，不手工改写 ssh_config |
+| CONFIG_UPGRADE_FAILED | 无法把旧版的本设备 ssh_config 原地升级（多为状态目录不可写或磁盘已满）；原文件保留，旧命令照常可用。核对状态目录归属和权限后重跑 setup，不手工改写 ssh_config |
 | SSH_CONFIG_UNSAFE | `~/.ssh` 不是可写目录，或 `~/.ssh/config` 是符号链接、硬链接、特殊文件或不可写；隧道与本设备配置已完成，`~/.ssh` 未被改动。由本人决定是否改为普通可写文件后重跑 setup，或继续用 `bootstrap.sh connect`/`mosh`；Agent 不替本人改动该文件 |
 | SSH_CONFIG_WRITE_FAILED | 检查通过但写入 `~/.ssh/config` 失败（如磁盘已满）；原文件保留。排除原因后重跑 setup，期间用 `bootstrap.sh connect`/`mosh` |
-| TUNNEL_DOWN | 本设备 WireGuard 隧道没有运行。setup 用 `wg-quick up` 启动的隧道在 Mac 重启（或 Linux 重启）后不会自动恢复；以前这时 `mosh` 只报 mosh/SSH 连接错误，现在 `connect`、`sftp`、`mosh` 连接前先做不需要 sudo 的路由检查并报此代码，verify 也会报此代码。由本人在交互终端运行 `bash ./bootstrap.sh setup`（曾用 `--bundle`/`--sha256`/`--state-root` 时带同样参数），输入本人 sudo 密码；setup 只启动本设备隧道，仍先检查路由和设备地址，已有冲突时报 `ROUTE_CONFLICT`、不动其他 VPN。得到 `CONFIGURED` 后重试原命令 |
+| TUNNEL_DOWN | 本设备 WireGuard 隧道没有运行，常见于 Mac 或 Linux 重启后（隧道不会自动恢复）。`connect`、`sftp`、`mosh`、verify 都会报此代码。由本人在交互终端运行 `bash ./bootstrap.sh setup`（曾用 `--bundle`/`--sha256`/`--state-root` 时带同样参数），输入本人 sudo 密码；setup 只启动本设备隧道，仍先检查路由和设备地址，已有冲突时报 `ROUTE_CONFLICT`、不动其他 VPN。得到 `CONFIGURED` 后重试原命令 |
 | TUNNEL_CONFLICT / ROUTE_CONFLICT | 已有隧道或路由冲突；核对是否本设备旧手工隧道，由本人处理迁移，不停止其他 VPN。`connect`/`sftp`/`mosh` 报 `ROUTE_CONFLICT` 表示到入口的路由走了其他网卡或 VPN，脚本未做任何改动 |
 | NO_RECENT_HANDSHAKE | 激活隧道并触发连接，检查 Endpoint／网络；在获准网络上重试 |
 | SSH_HOST_KEY_MISMATCH | 主机身份改变；暂停并联系管理员核对，不删除 known_hosts、不关闭严格校验 |
