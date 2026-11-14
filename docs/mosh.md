@@ -17,21 +17,20 @@ ssh <员工ID>-vm
 
 之前已完成 setup 的设备，更新源码后对同一设备包重跑 setup 即原地升级本设备 `ssh_config`（缺少 Include 时一并加入），无需新设备包。
 
-备选：从本机源码目录运行 `bash ./bootstrap.sh mosh`（SSH 用 `bash ./bootstrap.sh connect`）。隧道没起来时报 `TUNNEL_DOWN`，见[重启之后](#重启之后)。出现 `MOSH_CLIENT_MISSING` 时重跑 `setup --install-clients`；出现 `INTERACTIVE_TERMINAL_REQUIRED` 时，打开本人的交互终端运行同一命令，不通过管道驱动 Mosh 或记录握手输出。
+备选：从本机源码目录运行 `bash ./bootstrap.sh mosh`。隧道没起来时报 `TUNNEL_DOWN`，见[重启之后](#重启之后)。出现 `MOSH_CLIENT_MISSING` 时重跑 `setup --install-clients`；出现 `INTERACTIVE_TERMINAL_REQUIRED` 时，打开本人的交互终端运行同一命令，不通过管道驱动 Mosh 或记录握手输出。
 
 ### 重启之后
 
 重启后：
 
-1. 运行 `bash ./bootstrap.sh connect` 或 `bash ./bootstrap.sh mosh`；隧道未运行时得到 `TUNNEL_DOWN`。
-2. 本人在交互终端运行 `bash ./bootstrap.sh setup`（曾用 `--bundle`/`--sha256`/`--state-root` 时带同样参数），输入本人 sudo 密码，得到 `CONFIGURED`。
-3. 再运行 `mosh <员工ID>-vm` 或 `bash ./bootstrap.sh mosh`。
+1. 本人在交互终端运行 `bash ./bootstrap.sh connect`（曾用 `--bundle`/`--sha256`/`--state-root` 时带同样参数），输入本人 sudo 密码，得到 `CONNECTED`。
+2. 再运行 `mosh <员工ID>-vm` 或 `bash ./bootstrap.sh mosh`。
 
-系统自带的 `mosh <员工ID>-vm`/`ssh <员工ID>-vm` 不经过 bootstrap，隧道未运行时只会超时；遇到时按上面第 1 步确认。
+系统自带的 `mosh <员工ID>-vm`/`ssh <员工ID>-vm` 不经过 bootstrap，隧道未运行时只会超时；遇到时先做上面第 1 步。
 
 ### 字符集（locale）
 
-macOS 终端默认导出 `LC_CTYPE=UTF-8`，Linux 没有这个 locale，传到 VM 后 mosh-server 报 `needs a UTF-8 native locale` 并退出。对同一设备包重跑 `bash ./bootstrap.sh setup` 即可：本设备 `ssh_config` 会加上 `SetEnv LANG=C.UTF-8 LC_ALL=C.UTF-8`，`ssh`/`mosh <员工ID>-vm` 和 bootstrap 入口都生效。`bash ./bootstrap.sh mosh` 报 `LOCALE_UNAVAILABLE` 时，改用 `bash ./bootstrap.sh connect` 并告诉管理员。
+macOS 终端默认导出 `LC_CTYPE=UTF-8`，Linux 没有这个 locale，传到 VM 后 mosh-server 报 `needs a UTF-8 native locale` 并退出。对同一设备包重跑 `bash ./bootstrap.sh setup` 即可：本设备 `ssh_config` 会加上 `SetEnv LANG=C.UTF-8 LC_ALL=C.UTF-8`，`ssh`/`mosh <员工ID>-vm` 和 bootstrap 入口都生效。`bash ./bootstrap.sh mosh` 报 `LOCALE_UNAVAILABLE` 时，改用 `bash ./bootstrap.sh ssh` 并告诉管理员。
 
 想在 VM 里用中文等其他 locale（需 VM 已生成该 locale），由本人在 VM 的 shell 配置里设置 `LC_ALL`。
 
@@ -121,7 +120,7 @@ MobaXterm 连接不上时，不要改服务器或防火墙，改用方式 C，�
 
 ### 方式 C：原生 SSH
 
-PowerShell 里直接运行 `ssh <员工ID>-vm`（setup 已加 Include）；没有 Mosh 的断线恢复，但可立即使用。setup 报 `SSH_CONFIG_UNSAFE` 时，改用源码目录的 `powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 connect`。
+PowerShell 里直接运行 `ssh <员工ID>-vm`（setup 已加 Include）；没有 Mosh 的断线恢复，但可立即使用。setup 报 `SSH_CONFIG_UNSAFE` 时，改用源码目录的 `powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 ssh`。
 
 ## 确认登录正确
 

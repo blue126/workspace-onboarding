@@ -7,7 +7,7 @@
 | 检查 | `bash ./bootstrap.sh check` | `powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 check` |
 | 配置 | `bash ./bootstrap.sh setup --install-clients` | `powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 setup -InstallClients` |
 | 验证 | `bash ./bootstrap.sh verify` | `powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 verify` |
-| 进入 VM | `bash ./bootstrap.sh connect` | `powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 connect` |
+| 启动隧道（重启后、disconnect 后） | `bash ./bootstrap.sh connect` | `powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 connect` |
 
 由 Agent 按 [系统授权](system-authorization.md) 创建可交互终端并依次执行 setup、verify；员工只输入密码/确认 UAC，不手工复制整条命令。不要把密码发给 Agent。
 
@@ -21,7 +21,9 @@
 | DEPENDENCY_MISSING | 3（check）或 2 | 缺本机依赖；按平台指引安装，再执行原命令 |
 | CONFIGURED | 0 | 本机配置已完成；继续 verify，不代表远端已验证 |
 | NEEDS_ADMIN / HOMEBREW_REQUIRED | 2 | 完成对应系统授权或依赖安装，再执行同一命令 |
-| TUNNEL_DOWN | 3 | 本设备隧道未运行（常见于 Mac 重启后）；由本人运行 `bash ./bootstrap.sh setup` 恢复，再执行原命令 |
+| TUNNEL_DOWN | 3 | 本设备隧道未运行（常见于 Mac 重启后）；由本人运行 `bash ./bootstrap.sh connect` 恢复，再执行原命令 |
+| CONNECTED | 0 | connect 已启动本设备隧道，或隧道本来就在运行；不改任何文件 |
+| ROUTE_CHANGED | 0 | route 已保存新线路（隧道在运行时已切换）；继续 verify，见 [换线路](route.md) |
 | CLAUDE_AUTH_USER_PENDING | 0 | VM 浏览器证书 pin、SSH 身份、VM 归属、sudo、CLI、SFTP、握手通过；个人 Claude 授权尚待本人完成 |
 | CONNECTION_VERIFIED | 0 | 上述连接检查和 Claude 订阅登录状态通过；不代表真实项目任务已验收 |
 | 其他错误码 | 非 0 | 停止，按故障处理说明反馈；不要改条件使其通过 |
