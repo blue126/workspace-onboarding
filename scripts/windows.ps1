@@ -48,6 +48,11 @@ function Valid-Ip([string]$Value) {
     return [Net.IPAddress]::TryParse($Value,[ref]$parsed) -and
         $parsed.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork -and $parsed.ToString() -ceq $Value
 }
+# The WireGuard Endpoint may be an IPv4 address or a lowercase DNS name (an accelerator entry).
+function Valid-Endpoint([string]$Value) {
+    return (Valid-Ip $Value) -or ($Value.Length -le 253 -and
+        $Value -cmatch '^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$')
+}
 function Admin() {
     $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
     $principal=New-Object Security.Principal.WindowsPrincipal($identity)
@@ -292,7 +297,7 @@ try {
     }
     if($manifest.device_id -cnotmatch '^[a-z][a-z0-9-]{0,27}$' -or $manifest.vm_hostname -cnotmatch $vmPattern -or
        $manifest.tunnel_name -cnotmatch $tunnelPattern -or $manifest.wireguard_address -cnotmatch '/32$' -or
-       !(Valid-Ip $manifest.ssh_gateway) -or !(Valid-Ip $manifest.wireguard_endpoint) -or
+       !(Valid-Ip $manifest.ssh_gateway) -or !(Valid-Endpoint $manifest.wireguard_endpoint) -or
        !(Valid-Ip ($manifest.wireguard_address -replace '/32$','')) -or
        ($manifest.wireguard_address -replace '/32$','') -ceq $manifest.ssh_gateway) { Stop-Setup 'MANIFEST_INVALID' 'Invalid device identity or IPv4 addressing.' }
     # The tunnel name is derived from the device, exactly as the administrator side derives it.
