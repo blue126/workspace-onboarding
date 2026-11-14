@@ -416,6 +416,22 @@ elif name=="ip":
         self.bundle()
         self.call("setup",code="MANIFEST_INVALID")
 
+    def test_endpoint_accepts_a_dns_name(self):
+        self.manifest["wireguard_endpoint"]="ga-example.accelerator.example.com"
+        self.data["manifest.json"]=json.dumps(self.manifest).encode()
+        self.bundle()
+        self.call("setup")
+        conf=next(p for p in self.state.rglob("*.conf") if "[Peer]" in p.read_text())
+        self.assertIn("Endpoint = ga-example.accelerator.example.com:", conf.read_text())
+
+    def test_endpoint_rejects_names_that_are_not_hostnames(self):
+        for bad in ("Ga.Example.com","example","203.0.113.999","ga.example.com:51824","-ga.example.com","ga example.com"):
+            with self.subTest(bad=bad):
+                self.manifest["wireguard_endpoint"]=bad
+                self.data["manifest.json"]=json.dumps(self.manifest).encode()
+                self.bundle()
+                self.call("setup",code="MANIFEST_INVALID")
+
     def test_manifest_rejects_unknown_execution_fields(self):
         self.manifest["PostUp"]="echo PRIVATE_FAILURE_SENTINEL"
         self.data["manifest.json"]=json.dumps(self.manifest).encode()

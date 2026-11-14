@@ -202,7 +202,11 @@ valid_ip() {
         [[ "$part" =~ ^(0|[1-9][0-9]{0,2})$ ]] && [[ "$part" -le 255 ]] || return 1
     done
 }
-valid_ip "$gateway" && valid_ip "$endpoint" && valid_ip "${address%/32}" &&
+# The WireGuard Endpoint may be an IPv4 address or a lowercase DNS name (an accelerator entry).
+valid_host() {
+    [[ ${#1} -le 253 && "$1" =~ ^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]([a-z0-9-]{0,61}[a-z0-9])?$ ]]
+}
+valid_ip "$gateway" && { valid_ip "$endpoint" || valid_host "$endpoint"; } && valid_ip "${address%/32}" &&
     [[ "$address" == "${address%/32}/32" && "${address%/32}" != "$gateway" ]] ||
     fail MANIFEST_INVALID "入口、Endpoint 或 /32 地址无效。"
 # The VM browser entry is this VM's overlay HTTPS; verify checks its certificate pin.
