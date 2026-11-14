@@ -1,10 +1,11 @@
 # Windows PowerShell 5.1 or PowerShell 7.
 [CmdletBinding()]
 param(
-    [ValidateSet('check','setup','verify','connect','sftp','disconnect','mosh')][string]$Action='check',
+    [ValidateSet('check','setup','verify','connect','disconnect','ssh','sftp','mosh','route')][string]$Action='check',
     [string]$Bundle,
     [string]$Sha256,
     [string]$StateRoot,
+    [string]$Endpoint,
     [switch]$InstallClients,
     [switch]$NoActivate
 )

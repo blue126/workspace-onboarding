@@ -1,9 +1,10 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('check','setup','verify','connect','sftp','disconnect','mosh')][string]$Action='check',
+    [ValidateSet('check','setup','verify','connect','disconnect','ssh','sftp','mosh','route')][string]$Action='check',
     [string]$Bundle,
     [string]$Sha256,
     [string]$StateRoot,
+    [string]$Endpoint,
     [switch]$InstallClients,
     [switch]$NoActivate
 )
@@ -89,7 +90,11 @@ function Native([string]$Exe,[string[]]$Arguments,[string]$InputText='',[int]$Ti
     $proc.Dispose()
     return $nativeResult
 }
-function Require-Installed() {
+# The tunnel configuration without its Endpoint line, for route to repair a hand edit.
+function Without-Endpoint([string]$Path) {
+    return (([IO.File]::ReadAllText($Path).Replace("`r`n","`n") -split "`n") | Where-Object { $_ -cnotmatch '^Endpoint = ' }) -join "`n"
+}
+function Require-Installed([switch]$AnyEndpoint) {
     if(!(Test-Path -LiteralPath $state -PathType Container)) { Stop-Setup 'NOT_CONFIGURED' 'Run setup first.' }
     if((Get-Item -LiteralPath $state).Attributes -band [IO.FileAttributes]::ReparsePoint) { Stop-Setup 'STATE_PATH_UNSAFE' 'State directory is a link.' }
     foreach($name in $installedFiles) {
@@ -99,6 +104,8 @@ function Require-Installed() {
         if((Hash-File $existing) -cne (Hash-File (Join-Path $stage $name))) {
             # The pre-alias ssh_config stays usable; only setup upgrades it.
             if($name -ceq 'ssh_config' -and (Hash-File $existing) -ceq (Hash-File (Join-Path $stage 'ssh_config.v1'))) { $script:sshConfigLegacy=$true; continue }
+            # route also repairs a tunnel whose Endpoint line was edited by hand; nothing else may differ.
+            if($AnyEndpoint -and $name -ceq ($manifest.tunnel_name+'.conf') -and (Without-Endpoint $existing) -ceq (Without-Endpoint (Join-Path $stage $name))) { continue }
             if(Test-Reissued) { Stop-Setup 'REISSUE_READY' 'A newer bundle for this device was issued; run setup to replace the installed one.' }
             Stop-Setup 'CONFIG_CONFLICT' 'Installed configuration differs; nothing overwritten.'
         }
@@ -188,6 +195,8 @@ try {
     }
     if($env:OS -ne 'Windows_NT') { Stop-Setup 'UNSUPPORTED_PLATFORM' 'Use bootstrap.sh on macOS/Linux.' }
     if($InstallClients -and $Action -ne 'setup') { Stop-Setup 'INVALID_ARGUMENT' 'Only setup can install clients.' }
+    if($Action -eq 'route') { if(!$Endpoint) { Stop-Setup 'INVALID_ARGUMENT' 'route needs -Endpoint.' } }
+    elseif($Endpoint) { Stop-Setup 'INVALID_ARGUMENT' 'Only route accepts -Endpoint.' }
     $wireguard=Join-Path $env:ProgramFiles 'WireGuard/wireguard.exe'
     if($InstallClients) {
         if(!(Admin)) { Stop-Setup 'NEEDS_ADMIN' 'Open an elevated PowerShell with employee approval, then rerun setup -InstallClients.' }
@@ -339,8 +348,32 @@ try {
     $stateSsh=$state.Replace('\','/')
     $config=Join-Path $state 'ssh_config'
     $serviceName='WireGuardTunnel$'+$manifest.tunnel_name
-    $wgConf="[Interface]`nPrivateKey = $wgPrivate`nAddress = $($manifest.wireguard_address)`n`n[Peer]`nPublicKey = $($manifest.wireguard_public_key)`nEndpoint = $($manifest.wireguard_endpoint):$wgPort`nAllowedIPs = $($manifest.ssh_gateway)/32`nPersistentKeepalive = $wgKeepalive`n"
-    Write-Utf8 (Join-Path $stage ($manifest.tunnel_name+'.conf')) $wgConf
+    # A route chosen with `route -Endpoint` replaces the bundle's Endpoint for this install.
+    # It belongs to the installed bundle: a reissued bundle starts from its own Endpoint.
+    $bundleEndpoint=[string]$manifest.wireguard_endpoint
+    $wgEndpoint=$bundleEndpoint
+    $endpointFile=Join-Path $state 'endpoint'
+    $installedDigest=Join-Path $state 'bundle.sha256'
+    if((Test-Path -LiteralPath $endpointFile) -and (Test-Path -LiteralPath $installedDigest -PathType Leaf) -and
+       [IO.File]::ReadAllText($installedDigest).Trim() -ceq $Sha256) {
+        $routeItem=Get-Item -LiteralPath $endpointFile -Force
+        if($routeItem.PSIsContainer -or ($routeItem.Attributes -band [IO.FileAttributes]::ReparsePoint)) { Stop-Setup 'CONFIG_CONFLICT' 'Installed route is not a regular file; nothing overwritten.' }
+        $wgEndpoint=[IO.File]::ReadAllText($endpointFile).Trim()
+        if(!(Valid-Endpoint $wgEndpoint)) { Stop-Setup 'CONFIG_CONFLICT' 'Installed route is invalid; nothing overwritten.' }
+    }
+    # Start this device's tunnel service, or install it from the saved configuration.
+    function Start-Tunnel() {
+        $service=Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+        if($service) { Require-OwnedService $service; Start-Service -Name $serviceName; return }
+        $route=Get-NetRoute -AddressFamily IPv4 -DestinationPrefix ($manifest.ssh_gateway+'/32') -ErrorAction SilentlyContinue
+        if($route) { Stop-Setup 'ROUTE_CONFLICT' 'An existing route covers the workspace gateway; existing VPN left unchanged.' }
+        $installTunnel=Native $wireguard @('/installtunnelservice',(Join-Path $state ($manifest.tunnel_name+'.conf')))
+        if($installTunnel.ExitCode -ne 0) { Stop-Setup 'TUNNEL_START_FAILED' 'WireGuard tunnel service installation failed.' }
+    }
+    function Wg-Conf([string]$EndpointHost) {
+        return "[Interface]`nPrivateKey = $wgPrivate`nAddress = $($manifest.wireguard_address)`n`n[Peer]`nPublicKey = $($manifest.wireguard_public_key)`nEndpoint = $($EndpointHost):$wgPort`nAllowedIPs = $($manifest.ssh_gateway)/32`nPersistentKeepalive = $wgKeepalive`n"
+    }
+    Write-Utf8 (Join-Path $stage ($manifest.tunnel_name+'.conf')) (Wg-Conf $wgEndpoint)
     $hostLine='Host '+$sshAlias
     if($vmAlias) { $hostLine+=' '+$vmAlias }
     $sshConf=@"
@@ -407,16 +440,17 @@ $hostLine
             if($NoActivate) { Setup-SshInclude; Report 'CONFIGURED'; exit 0 }
             if(!(Admin)) { Stop-Setup 'NEEDS_ADMIN' 'Configuration prepared; rerun setup in elevated PowerShell to activate the tunnel.' }
             if(!$result.client_ready) { Stop-Setup 'DEPENDENCY_MISSING' 'Authorize setup -InstallClients to install WireGuard.' }
-            $service=Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-            if($service) { Require-OwnedService $service; Start-Service -Name $serviceName }
-            else {
-                $route=Get-NetRoute -AddressFamily IPv4 -DestinationPrefix ($manifest.ssh_gateway+'/32') -ErrorAction SilentlyContinue
-                if($route) { Stop-Setup 'ROUTE_CONFLICT' 'An existing route covers the workspace gateway; existing VPN left unchanged.' }
-                $installTunnel=Native $wireguard @('/installtunnelservice',(Join-Path $state ($manifest.tunnel_name+'.conf')))
-                if($installTunnel.ExitCode -ne 0) { Stop-Setup 'TUNNEL_START_FAILED' 'WireGuard tunnel service installation failed.' }
-            }
+            Start-Tunnel
             Setup-SshInclude
             Report 'CONFIGURED'
+        }
+        'connect' {
+            # Start this installed device's tunnel; files and clients stay as they are.
+            Require-Installed
+            if(!(Admin)) { Stop-Setup 'NEEDS_ADMIN' 'Elevated PowerShell is needed to start this tunnel.' }
+            if(!$result.client_ready) { Stop-Setup 'DEPENDENCY_MISSING' 'Authorize setup -InstallClients to install WireGuard.' }
+            Start-Tunnel
+            Report 'CONNECTED'
         }
         'disconnect' {
             Require-Installed
@@ -425,8 +459,44 @@ $hostLine
             if($service) { Require-OwnedService $service; Stop-Service -Name $serviceName }
             Report 'DISCONNECTED'
         }
+        'route' {
+            if(!(Valid-Endpoint $Endpoint)) { Stop-Setup 'INVALID_ARGUMENT' '-Endpoint takes an IPv4 address or a lowercase DNS name, without a port.' }
+            Require-Installed -AnyEndpoint
+            # A tunnel service must be this device's before anything changes.
+            $service=Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+            if($service) {
+                if(!(Admin)) { Stop-Setup 'NEEDS_ADMIN' 'Run the same route command in elevated PowerShell; nothing changed.' }
+                Require-OwnedService $service
+            }
+            # The tunnel file and the saved route change together; on failure both return
+            # to what they were, so later commands still accept the install.
+            $confPath=Join-Path $state ($manifest.tunnel_name+'.conf')
+            try {
+                $oldConf=[IO.File]::ReadAllBytes($confPath)
+                $oldRoute=$null
+                if(Test-Path -LiteralPath $endpointFile) { $oldRoute=[IO.File]::ReadAllBytes($endpointFile) }
+            } catch { Stop-Setup 'ROUTE_WRITE_FAILED' 'Could not read the installed route; nothing changed.' }
+            try {
+                # Overwrite in place: the existing file keeps its private ACL.
+                Write-Utf8 $confPath (Wg-Conf $Endpoint)
+                if($Endpoint -ceq $bundleEndpoint) { if(Test-Path -LiteralPath $endpointFile) { Remove-Item -LiteralPath $endpointFile -Force } }
+                else { Write-Utf8 $endpointFile ($Endpoint+"`n"); Private-Acl $endpointFile }
+            } catch {
+                try {
+                    [IO.File]::WriteAllBytes($confPath,$oldConf)
+                    if($null -ne $oldRoute) { [IO.File]::WriteAllBytes($endpointFile,$oldRoute); Private-Acl $endpointFile }
+                    elseif(Test-Path -LiteralPath $endpointFile) { Remove-Item -LiteralPath $endpointFile -Force }
+                } catch {}
+                Stop-Setup 'ROUTE_WRITE_FAILED' 'Could not save the new route; previous route kept.'
+            }
+            # The tunnel service reads its configuration when it starts.
+            if($service -and $service.Status -eq 'Running') {
+                try { Restart-Service -Name $serviceName } catch { Stop-Setup 'ROUTE_APPLY_FAILED' 'Route saved, but the tunnel service did not restart; run disconnect, then connect.' }
+            }
+            Report 'ROUTE_CHANGED'
+        }
         'mosh' { Require-Installed; Stop-Setup 'MOSH_WSL_REQUIRED' 'Use Mosh in WSL or MobaXterm with this device SSH config; see docs/mosh.md. Do not start a second VPN in WSL.' }
-        'connect' { Require-Installed; & $sshCommand.Source -F $config -tt $sshAlias; exit $LASTEXITCODE }
+        'ssh' { Require-Installed; & $sshCommand.Source -F $config -tt $sshAlias; exit $LASTEXITCODE }
         'sftp' { Require-Installed; & $sftpCommand.Source -F $config $sshAlias; exit $LASTEXITCODE }
         'verify' {
             Require-Installed

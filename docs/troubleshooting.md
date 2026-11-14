@@ -16,10 +16,11 @@
 | STATE_ROOT_CONFLICT / CONFIG_CONFLICT | 现有目录／配置归属或内容不匹配（例如同一个包装好后又被改过）；保留原文件，联系管理员，不覆盖 |
 | CONFIG_REPLACE_FAILED | 换发时旧配置没能归档；什么都没替换，报告此代码给管理员 |
 | CONFIG_UPGRADE_FAILED | 无法把旧版的本设备 ssh_config 原地升级（多为状态目录不可写或磁盘已满）；原文件保留，旧命令照常可用。核对状态目录归属和权限后重跑 setup，不手工改写 ssh_config |
-| SSH_CONFIG_UNSAFE | `~/.ssh` 不是可写目录，或 `~/.ssh/config` 是符号链接、硬链接、特殊文件或不可写；隧道与本设备配置已完成，`~/.ssh` 未被改动。由本人决定是否改为普通可写文件后重跑 setup，或继续用 `bootstrap.sh connect`/`mosh`；Agent 不替本人改动该文件 |
-| SSH_CONFIG_WRITE_FAILED | 检查通过但写入 `~/.ssh/config` 失败（如磁盘已满）；原文件保留。排除原因后重跑 setup，期间用 `bootstrap.sh connect`/`mosh` |
-| TUNNEL_DOWN | 本设备 WireGuard 隧道没有运行，常见于 Mac 或 Linux 重启后（隧道不会自动恢复）。`connect`、`sftp`、`mosh`、verify 都会报此代码。由本人在交互终端运行 `bash ./bootstrap.sh setup`（曾用 `--bundle`/`--sha256`/`--state-root` 时带同样参数），输入本人 sudo 密码，得到 `CONFIGURED` 后重试原命令 |
-| TUNNEL_CONFLICT / ROUTE_CONFLICT | 已有隧道或路由冲突；核对是否本设备旧手工隧道，由本人处理迁移，不停止其他 VPN。`connect`/`sftp`/`mosh` 报 `ROUTE_CONFLICT` 表示到入口的路由走了其他网卡或 VPN |
+| SSH_CONFIG_UNSAFE | `~/.ssh` 不是可写目录，或 `~/.ssh/config` 是符号链接、硬链接、特殊文件或不可写；隧道与本设备配置已完成，`~/.ssh` 未被改动。由本人决定是否改为普通可写文件后重跑 setup，或继续用 `bootstrap.sh mosh`（Windows 用 `bootstrap.ps1 ssh`）；Agent 不替本人改动该文件 |
+| SSH_CONFIG_WRITE_FAILED | 检查通过但写入 `~/.ssh/config` 失败（如磁盘已满）；原文件保留。排除原因后重跑 setup，期间用 `bootstrap.sh mosh`（Windows 用 `bootstrap.ps1 ssh`） |
+| TUNNEL_DOWN | 本设备 WireGuard 隧道没有运行，常见于 Mac 或 Linux 重启后（隧道不会自动恢复）。`ssh`、`sftp`、`mosh`、verify 都会报此代码。由本人在交互终端运行 `bash ./bootstrap.sh connect`（曾用 `--bundle`/`--sha256`/`--state-root` 时带同样参数），输入本人 sudo 密码，得到 `CONNECTED` 后重试原命令 |
+| ROUTE_APPLY_FAILED / ROUTE_WRITE_FAILED | route 换线路没完成，见 [换线路](route.md#第-3-步route) |
+| TUNNEL_CONFLICT / ROUTE_CONFLICT | 已有隧道或路由冲突；核对是否本设备旧手工隧道，由本人处理迁移，不停止其他 VPN。`ssh`/`sftp`/`mosh` 报 `ROUTE_CONFLICT` 表示到入口的路由走了其他网卡或 VPN |
 | NO_RECENT_HANDSHAKE | 激活隧道并触发连接，检查 Endpoint／网络；在获准网络上重试 |
 | SSH_HOST_KEY_MISMATCH | 主机身份改变；暂停并联系管理员核对，不删除 known_hosts、不关闭严格校验 |
 | SSH_CONNECTION_FAILED | 核对 WireGuard、设备是否启用、网络和系统时间 |
@@ -36,6 +37,6 @@
 ## 没有结果码的常见现象
 
 - **`mosh <员工ID>-vm` 报 `mosh-server needs a UTF-8 native locale to run`，或提到 `LC_CTYPE=UTF-8`：** macOS 终端默认导出 `LC_CTYPE=UTF-8`，这个名字只在 macOS 存在，经 SSH 和 Mosh 传到 VM 后 mosh-server 找不到该 locale 就退出。对同一设备包重跑 `bash ./bootstrap.sh setup` 即可。不要为此修改 `~/.zshrc`、系统 `/etc/ssh/ssh_config` 或 VM。详见 [Mosh 登录 · 字符集](mosh.md#字符集locale)。
-- **重启后 `mosh <员工ID>-vm` 或 `ssh <员工ID>-vm` 长时间无响应、报超时：** 系统自带的 ssh/mosh 不经过 bootstrap，不会报 `TUNNEL_DOWN`。先运行 `bash ./bootstrap.sh connect` 看是否报 `TUNNEL_DOWN`，再按上表恢复。
+- **重启后 `mosh <员工ID>-vm` 或 `ssh <员工ID>-vm` 长时间无响应、报超时：** 系统自带的 ssh/mosh 不经过 bootstrap，不会报 `TUNNEL_DOWN`。由本人运行 `bash ./bootstrap.sh connect`：隧道没在运行时它会启动本设备隧道，得到 `CONNECTED` 后重试。
 
 个人 Claude 的邮箱、验证码、完整授权链接、令牌和浏览器会话不用于排错。如需外发其他材料，先由本人审阅脱敏结果并明确授权。

@@ -15,6 +15,7 @@ expected_sha=""
 state_root=""
 install_clients=false
 no_activate=false
+route_endpoint=""
 stage=""
 package_verified=false
 client_ready=false
@@ -46,17 +47,19 @@ report() {
 fail() { printf '%s\n' "$2" >&2; report "$1"; exit "${3:-2}"; }
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --bundle|--sha256|--state-root)
+        --bundle|--sha256|--state-root|--endpoint)
             [[ $# -ge 2 ]] || fail INVALID_ARGUMENT "参数缺少值。"
-            case "$1" in --bundle) bundle=$2 ;; --sha256) expected_sha=$2 ;; --state-root) state_root=$2 ;; esac
+            case "$1" in --bundle) bundle=$2 ;; --sha256) expected_sha=$2 ;; --state-root) state_root=$2 ;; --endpoint) route_endpoint=$2 ;; esac
             shift 2 ;;
         --install-clients) install_clients=true; shift ;;
         --no-activate) no_activate=true; shift ;;
         *) fail INVALID_ARGUMENT "未知参数；请阅读 README。" ;;
     esac
 done
-case "$action" in check|setup|verify|connect|sftp|disconnect|mosh) ;; *) fail INVALID_ACTION "动作：check/setup/verify/connect/sftp/disconnect/mosh。" ;; esac
+case "$action" in check|setup|verify|connect|disconnect|ssh|sftp|mosh|route) ;; *) fail INVALID_ACTION "动作：check/setup/verify/connect/disconnect/ssh/sftp/mosh/route。" ;; esac
 if $install_clients; then [[ "$action" == setup ]] || fail INVALID_ARGUMENT "只有 setup 可以安装客户端。"; fi
+if [[ "$action" == route ]]; then [[ -n "$route_endpoint" ]] || fail INVALID_ARGUMENT "route 需要 --endpoint。"
+elif [[ -n "$route_endpoint" ]]; then fail INVALID_ARGUMENT "只有 route 可以指定 --endpoint。"; fi
 require_tunnel_admin() {
     if ! sudo -n true >/dev/null 2>&1; then
         # Logging may redirect stderr; user input still comes from the terminal.
@@ -237,6 +240,16 @@ done
 state_root="$(cd "$parent" && pwd -P)$suffix"
 if [[ "$profile" == oci-hub ]]; then state_root="$state_root/oci-hub"; fi
 state="$state_root/$device"
+# A route chosen with `route --endpoint` replaces the bundle's Endpoint for this install.
+# It belongs to the installed bundle: a reissued bundle starts from its own Endpoint.
+bundle_endpoint="$endpoint"
+endpoint_file="$state/endpoint"
+if [[ -e "$endpoint_file" || -L "$endpoint_file" ]] && [[ -f "$state/bundle.sha256" && ! -L "$state/bundle.sha256" ]] &&
+    [[ "$(tr -d '\r\n' < "$state/bundle.sha256")" == "$expected_sha" ]]; then
+    [[ -f "$endpoint_file" && ! -L "$endpoint_file" ]] || fail CONFIG_CONFLICT "Installed route is not a regular file; nothing overwritten."
+    endpoint="$(tr -d '\r\n' < "$endpoint_file")"
+    { valid_ip "$endpoint" || valid_host "$endpoint"; } || fail CONFIG_CONFLICT "Installed route is invalid; nothing overwritten."
+fi
 case "$state_root/" in "$repo_dir/"*) fail STATE_IN_REPOSITORY "Install state outside this repository." ;; esac
 if [[ -d "$state_root" ]]; then
     [[ ! -L "$state_root" && "$(ls -nd "$state_root" | awk '{print $3}')" == "$(id -u)" ]] ||
@@ -344,10 +357,14 @@ EOF
 write_configs
 ssh_config_legacy=false
 require_installed() {
+    local any_endpoint="${1:-}"
     [[ -d "$state" && ! -L "$state" ]] || fail NOT_CONFIGURED "Run setup first."
     for file in client-key known_hosts manifest.json wg.key ssh_config "$tunnel.conf" bundle.sha256; do
         [[ -f "$state/$file" && ! -L "$state/$file" ]] || fail CONFIG_CONFLICT "Installed configuration differs; nothing overwritten."
         cmp -s "$stage/$file" "$state/$file" && continue
+        # route also repairs a tunnel whose Endpoint line was edited by hand; nothing else may differ.
+        if [[ -n "$any_endpoint" && "$file" == "$tunnel.conf" ]] &&
+            cmp -s <(grep -v '^Endpoint = ' "$stage/$file") <(grep -v '^Endpoint = ' "$state/$file"); then continue; fi
         # An earlier release's ssh_config stays usable; only setup upgrades it.
         if [[ "$file" == ssh_config ]] &&
             { cmp -s "$stage/ssh_config.v1" "$state/ssh_config" || cmp -s "$stage/ssh_config.v13" "$state/ssh_config"; }; then
@@ -485,7 +502,7 @@ owned_tunnel() {
     [[ "$actual" == "$client_public" && "$actual_peer" == "$peer" &&
        "$allowed" == "$peer"$'\t'"$gateway/32" && "$current_address" == "$address" ]]
 }
-# Unprivileged read of the live route to the gateway: connect/sftp/mosh never call sudo.
+# Unprivileged read of the live route to the gateway: ssh/sftp/mosh never call sudo.
 # up: the route leaves through an interface holding this device's /32 address;
 # conflict: another interface or network covers the gateway; down: nothing does.
 tunnel_route_state() {
@@ -508,7 +525,7 @@ tunnel_route_state() {
         else printf 'down\n'; fi
     fi
 }
-tunnel_down_message="本设备 WireGuard 隧道未运行（Mac 重启后不会自动恢复）。请本人在交互终端运行 bash ./bootstrap.sh setup（需本人 sudo 授权；曾用 --bundle/--sha256/--state-root 时带同样参数）重新启动本设备隧道，然后重试；不要停用其他 VPN。"
+tunnel_down_message="本设备 WireGuard 隧道未运行（Mac 重启后不会自动恢复）。请本人在交互终端运行 bash ./bootstrap.sh connect（需本人 sudo 授权；曾用 --bundle/--sha256/--state-root 时带同样参数）启动本设备隧道，然后重试；不要停用其他 VPN。"
 require_tunnel_up() {
     case "$(tunnel_route_state)" in
         up) ;;
@@ -528,6 +545,25 @@ check_new_tunnel_route() {
         conflicting="$(ip -4 route show match "$gateway" | awk '$1!="default" {bad=1} END {print bad+0}')"
     fi
     [[ "$conflicting" == 0 ]] || fail ROUTE_CONFLICT "设备地址或入口路由已被使用；未停止任何现有 VPN。"
+}
+# Bring up this device's tunnel, or accept it when it is already this device's.
+start_tunnel() {
+    local tunnel_status
+    require_tunnel_admin
+    if resolve_tunnel_interface; then
+        owned_tunnel || fail TUNNEL_CONFLICT "Existing tunnel does not belong to this device."
+        return 0
+    fi
+    check_new_tunnel_route
+    if run_wg_quick up "$state/$tunnel.conf" >"$stage/wg-quick.log" 2>&1; then tunnel_status=0
+    else tunnel_status=$?; fi
+    if [[ "$tunnel_status" != 0 ]]; then
+        if grep -q 'Version mismatch: bash' "$stage/wg-quick.log"; then
+            fail TUNNEL_START_FAILED "wg-quick 的 Bash 版本不兼容；更新项目后重跑，不要重置设备身份。"
+        fi
+        fail TUNNEL_START_FAILED "WireGuard 启动失败（退出码 $tunnel_status）；停止并报告此错误，不要修改其他 VPN。"
+    fi
+    owned_tunnel || fail TUNNEL_CONFLICT "Started tunnel does not match the assigned identity."
 }
 case "$action" in
     check)
@@ -562,23 +598,15 @@ case "$action" in
         # The Include is the last step: an unsafe ~/.ssh/config never blocks the tunnel.
         if $no_activate; then setup_ssh_include; report CONFIGURED; exit 0; fi
         $client_ready || fail DEPENDENCY_MISSING "请运行 setup --install-clients 安装 WireGuard CLI。"
-        require_tunnel_admin
-        if resolve_tunnel_interface; then
-            owned_tunnel || fail TUNNEL_CONFLICT "Existing tunnel does not belong to this device."
-        else
-            check_new_tunnel_route
-            if run_wg_quick up "$state/$tunnel.conf" >"$stage/wg-quick.log" 2>&1; then tunnel_status=0
-            else tunnel_status=$?; fi
-            if [[ "$tunnel_status" != 0 ]]; then
-                if grep -q 'Version mismatch: bash' "$stage/wg-quick.log"; then
-                    fail TUNNEL_START_FAILED "wg-quick 的 Bash 版本不兼容；更新项目后重跑，不要重置设备身份。"
-                fi
-                fail TUNNEL_START_FAILED "WireGuard 启动失败（退出码 $tunnel_status）；停止并报告此错误，不要修改其他 VPN。"
-            fi
-            owned_tunnel || fail TUNNEL_CONFLICT "Started tunnel does not match the assigned identity."
-        fi
+        start_tunnel
         setup_ssh_include
         report CONFIGURED ;;
+    connect)
+        # Start this installed device's tunnel; files and clients stay as they are.
+        require_installed
+        $client_ready || fail DEPENDENCY_MISSING "缺少 WireGuard CLI；请运行 setup --install-clients。"
+        start_tunnel
+        report CONNECTED ;;
     disconnect)
         require_installed
         $client_ready || fail DEPENDENCY_MISSING "缺少 WireGuard CLI。"
@@ -602,7 +630,7 @@ case "$action" in
         # refuse to start; C.UTF-8 exists on macOS, Debian/Ubuntu and the VM.
         # grep reads the whole list: -q would stop early and pipefail would see SIGPIPE.
         locale -a 2>/dev/null | grep -Eix 'c\.utf-?8' >/dev/null ||
-            fail LOCALE_UNAVAILABLE "本机没有 C.UTF-8 locale，Mosh 无法启动；改用 bash ./bootstrap.sh connect，并把此代码报告给管理员。"
+            fail LOCALE_UNAVAILABLE "本机没有 C.UTF-8 locale，Mosh 无法启动；改用 bash ./bootstrap.sh ssh，并把此代码报告给管理员。"
         for variable in $(compgen -e); do
             case "$variable" in LC_*|LANGUAGE) unset "$variable" ;; esac
         done
@@ -615,12 +643,55 @@ case "$action" in
         # The VM runs a native mosh-server with the default UDP range open.
         exec mosh --ssh="ssh -F $quoted_config" "$ssh_alias"
         ;;
-    connect|sftp)
+    route)
+        { valid_ip "$route_endpoint" || valid_host "$route_endpoint"; } ||
+            fail INVALID_ARGUMENT "--endpoint 只接受 IPv4 地址或小写域名，不带端口。"
+        require_installed any-endpoint
+        # A running tunnel must be this device's before anything changes.
+        live=false
+        if $client_ready; then
+            require_tunnel_admin
+            if resolve_tunnel_interface; then
+                owned_tunnel || fail TUNNEL_CONFLICT "Existing tunnel does not belong to this device; nothing changed."
+                live=true
+            fi
+        fi
+        endpoint="$route_endpoint"
+        write_configs
+        # The tunnel file and the saved route change together: everything is staged
+        # first, and the old tunnel file comes back if the saved route cannot follow.
+        new_conf="" old_conf="" new_route=""
+        route_write_failed() {
+            rm -f -- ${new_conf:+"$new_conf"} ${old_conf:+"$old_conf"} ${new_route:+"$new_route"}
+            fail ROUTE_WRITE_FAILED "Could not save the new route; previous route kept."
+        }
+        { new_conf="$(mktemp "$state/.conf.XXXXXXXX")" && cp "$stage/$tunnel.conf" "$new_conf" && chmod 600 "$new_conf" &&
+            old_conf="$(mktemp "$state/.conf-old.XXXXXXXX")" && cp "$state/$tunnel.conf" "$old_conf"; } || route_write_failed
+        if [[ "$route_endpoint" != "$bundle_endpoint" ]]; then
+            { new_route="$(mktemp "$state/.endpoint.XXXXXXXX")" && printf '%s\n' "$route_endpoint" > "$new_route" &&
+                chmod 600 "$new_route"; } || route_write_failed
+        fi
+        mv -f "$new_conf" "$state/$tunnel.conf" || route_write_failed
+        new_conf=""
+        if [[ -n "$new_route" ]]; then saved_route() { mv -f "$new_route" "$endpoint_file"; }
+        else saved_route() { rm -f "$endpoint_file"; }; fi
+        if ! saved_route; then
+            mv -f "$old_conf" "$state/$tunnel.conf" && old_conf=""
+            route_write_failed
+        fi
+        rm -f "$old_conf"
+        # The running tunnel switches in place; no restart, no route change.
+        if $live; then
+            sudo "$wg_bin" set "$wg_interface" peer "$peer" endpoint "$route_endpoint:$wg_port" >/dev/null 2>&1 ||
+                fail ROUTE_APPLY_FAILED "Route saved, but the running tunnel did not switch; run disconnect, then connect."
+        fi
+        report ROUTE_CHANGED ;;
+    ssh|sftp)
         require_installed
         require_tunnel_up
         cleanup
         stage=""
-        if [[ "$action" == connect ]]; then exec ssh -F "$state/ssh_config" -tt "$ssh_alias"
+        if [[ "$action" == ssh ]]; then exec ssh -F "$state/ssh_config" -tt "$ssh_alias"
         else exec sftp -F "$state/ssh_config" "$ssh_alias"; fi ;;
     verify)
         require_installed

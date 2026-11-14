@@ -10,7 +10,7 @@
 
 ## 规则
 
-1. **失败即停。** bootstrap 的 check/setup/verify 每次输出一行 JSON，以其中的 `code` 判断，不以退出码判断；外层 ZIP 检查只看最后一行 `READY`/`STOP`；`connect`、`mosh` 等交互入口不输出 JSON。出错就停下，把命令、系统和 `code` 告诉员工，按 [故障处理](docs/troubleshooting.md) 处理；不改条件、不反复重试、不绕过。
+1. **失败即停。** bootstrap 的 check/setup/verify 每次输出一行 JSON，以其中的 `code` 判断，不以退出码判断；外层 ZIP 检查只看最后一行 `READY`/`STOP`；`ssh`、`sftp`、`mosh` 等交互入口不输出 JSON。出错就停下，把命令、系统和 `code` 告诉员工，按 [故障处理](docs/troubleshooting.md) 处理；不改条件、不反复重试、不绕过。
 2. **员工只做下表的事，每次先说明原因。** 其余都由你完成。
 3. **不收集秘密。** 设备包由员工本人在 https://cc.willfan.me/me 下载；你不代为登录，不索取验证码、密码、Cookie 或令牌。sudo 密码和 UAC 由员工在自己的终端或弹窗里输入，见 [系统授权](docs/system-authorization.md)。
 4. **私钥不出现在任何输出里。** 不打开内层设备包，不打印、上传或转发密钥，不执行包内文件；提醒员工妥善保管设备包。
@@ -80,7 +80,7 @@
 - **为什么：** Claude 登录必须在 VM 里完成，账号凭据不落到本机；该地址只在 VPN 内可达，证书是这台 VM 自签的，浏览器会提示"不安全"。
 - **证书（由你核对，不交给员工）：** 只有 verify 输出 `desktop_tls=passed` 才让员工继续：这表示 verify 已用设备包里的 pin 核对过该地址的证书。此时告诉员工浏览器的证书提示是正常的，可以继续访问；不要请员工查看或比对指纹。`desktop_tls` 不是 `passed` 或出现 `TLS_PIN_FAILED` 时停止，请员工联系管理员，不要让员工打开该地址。
 - **验收：** 员工再运行一次 verify，结果 `CONNECTION_VERIFIED`（`claude_auth=passed`）。
-- **可能遇到的问题：** 页面打不开 → VPN 未连接，重跑 setup；画面空白或提示桌面未启动 → 先在 mosh 里运行 `workspace-login`，再刷新；不要在本机浏览器直接打开 Claude 授权链接。
+- **可能遇到的问题：** 页面打不开 → VPN 未连接，运行 connect；画面空白或提示桌面未启动 → 先在 mosh 里运行 `workspace-login`，再刷新；不要在本机浏览器直接打开 Claude 授权链接。
 - **完成后告诉员工：** 除了 mosh，还可以用浏览器打开 https://hapi.willfan.me （用申请邮箱的验证码登录，电脑和手机都可以）查看和继续 VM 上的 Claude Code 会话。这是同一台 VM 的网页入口，已经配置好，你不用做任何设置，也不要改动 VM 上和 HAPI 有关的配置。
 
 ## 资料目录
@@ -92,6 +92,7 @@
 | [docs/verification.md](docs/verification.md) | check/setup/verify 的结果码与验收字段（含 `desktop_tls`） |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | 任何非成功的 `code` |
 | [docs/mosh.md](docs/mosh.md) | 别名细节；Windows 的 WSL、MobaXterm、原生 SSH |
+| [docs/route.md](docs/route.md) | 员工要求改用加速线路或改回普通线路 |
 | [docs/administrator.md](docs/administrator.md) | 管理员侧的设备包格式与交付约定 |
 
-迁移或更新通知要求换新包时，按本页重新下载并运行 check → setup → verify，不复用旧包。旧运行目录用 `--state-root "原目录"`（Windows `-StateRoot`）继续使用。其他入口：`bootstrap.sh connect`（SSH 进入 VM）、`sftp`、`disconnect`（断开 VPN），Windows 用 `bootstrap.ps1` 的同名动作。
+迁移或更新通知要求换新包时，按本页重新下载并运行 check → setup → verify，不复用旧包。旧运行目录用 `--state-root "原目录"`（Windows `-StateRoot`）继续使用。其他入口：`bootstrap.sh connect`（启动本设备隧道，如重启后）、`disconnect`（断开隧道）、`sftp`（传文件），Windows 用 `bootstrap.ps1` 的同名动作。

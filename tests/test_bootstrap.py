@@ -247,6 +247,7 @@ elif name=="wg":
  elif args[-1]=="public-key":print("wrong" if os.environ.get("WRONG_TUNNEL") else ((p/"tunnel-active").read_text().strip() or m["client_wireguard_public_key"]))
  elif args[-1]=="peers":print(m["wireguard_public_key"])
  elif args[-1]=="allowed-ips":print(m["wireguard_public_key"]+"\t"+m["ssh_gateway"]+"/32")
+ elif args[:1]==["set"]:assert (p/"tunnel-active").exists() and args[2:5]==["peer",m["wireguard_public_key"],"endpoint"],args
  elif args[-1]=="latest-handshakes":print(m["wireguard_public_key"]+"\t"+str(0 if os.environ.get("STALE_WG") else int(time.time())))
  else:raise AssertionError(args)
 elif name=="wg-quick":
@@ -431,6 +432,108 @@ elif name=="ip":
                 self.data["manifest.json"]=json.dumps(self.manifest).encode()
                 self.bundle()
                 self.call("setup",code="MANIFEST_INVALID")
+
+    def route(self, endpoint, code="ROUTE_CHANGED"):
+        return self.call("route", "-Endpoint" if WINDOWS else "--endpoint", endpoint, code=code)
+
+    def tunnel_conf(self):
+        return self.native_state()/(self.manifest["tunnel_name"]+".conf")
+
+    def test_route_switches_the_endpoint_and_later_commands_accept_it(self):
+        self.setup()
+        original=self.tunnel_conf().read_bytes()
+        self.route("ga-example.accelerator.example.com")
+        self.assertIn("Endpoint = ga-example.accelerator.example.com:51824", self.tunnel_conf().read_text())
+        self.assertEqual((self.native_state()/"endpoint").read_text().strip(),"ga-example.accelerator.example.com")
+        self.call("check",code="DEPENDENCY_MISSING" if WINDOWS else "CHECKED")
+        self.setup()
+        self.assertIn("Endpoint = ga-example.accelerator.example.com:51824", self.tunnel_conf().read_text())
+        # Back to the bundle's own Endpoint: the install is byte-identical to a fresh one.
+        self.route(self.manifest["wireguard_endpoint"])
+        self.assertEqual(self.tunnel_conf().read_bytes(),original)
+        self.assertFalse((self.native_state()/"endpoint").exists())
+        self.call("check",code="DEPENDENCY_MISSING" if WINDOWS else "CHECKED")
+
+    def test_route_repairs_a_hand_edited_endpoint_only(self):
+        self.setup()
+        conf=self.tunnel_conf()
+        conf.write_text(conf.read_text().replace("Endpoint = 203.0.113.10:","Endpoint = ga-example.accelerator.example.com:"))
+        self.call("check",code="CONFIG_CONFLICT")
+        self.route("ga-example.accelerator.example.com")
+        self.call("check",code="DEPENDENCY_MISSING" if WINDOWS else "CHECKED")
+        # Any other edit is still a conflict, and route changes nothing.
+        conf.write_text(conf.read_text().replace("PersistentKeepalive = 15","PersistentKeepalive = 25"))
+        edited=conf.read_bytes()
+        self.route("203.0.113.10",code="CONFIG_CONFLICT")
+        self.assertEqual(conf.read_bytes(),edited)
+
+    def fail_route_save(self):
+        # mv/rm of the saved route fail; every other file operation passes through.
+        for tool in ("mv","rm"):
+            stub=self.bin/tool
+            stub.write_text('#!/bin/bash\nfor arg in "$@"; do [[ "$arg" == */endpoint ]] && exit 1; done\n'
+                            f'exec /bin/{tool} "$@"\n')
+            stub.chmod(0o755)
+
+    @unittest.skipIf(WINDOWS, "Unix file-operation stubs")
+    def test_route_save_failure_keeps_the_previous_route(self):
+        self.setup()
+        original=self.tunnel_conf().read_bytes()
+        self.fail_route_save()
+        self.route("ga-example.accelerator.example.com",code="ROUTE_WRITE_FAILED")
+        self.assertEqual(self.tunnel_conf().read_bytes(),original)
+        self.assertFalse((self.native_state()/"endpoint").exists())
+        self.assertEqual(sorted(p.name for p in self.native_state().glob(".*")),[])
+        self.call("check",code="CHECKED")
+        # Switching back fails the same way and keeps the chosen route.
+        for tool in ("mv","rm"):(self.bin/tool).unlink()
+        self.route("ga-example.accelerator.example.com")
+        switched=self.tunnel_conf().read_bytes()
+        self.fail_route_save()
+        self.route(self.manifest["wireguard_endpoint"],code="ROUTE_WRITE_FAILED")
+        self.assertEqual(self.tunnel_conf().read_bytes(),switched)
+        self.assertEqual((self.native_state()/"endpoint").read_text().strip(),"ga-example.accelerator.example.com")
+        self.call("check",code="CHECKED")
+
+    def test_route_rejects_bad_arguments(self):
+        self.setup()
+        before={q.name:q.read_bytes() for q in self.native_state().iterdir()}
+        for bad in ("Ga.Example.com","example","203.0.113.999","ga.example.com:51824","-ga.example.com"):
+            with self.subTest(bad=bad):self.route(bad,code="INVALID_ARGUMENT")
+        self.call("route",code="INVALID_ARGUMENT")
+        self.call("check","-Endpoint" if WINDOWS else "--endpoint","203.0.113.10",code="INVALID_ARGUMENT")
+        self.assertEqual(before,{q.name:q.read_bytes() for q in self.native_state().iterdir()})
+
+    def test_route_needs_an_installed_device(self):
+        self.route("203.0.113.20",code="NOT_CONFIGURED")
+
+    def test_reissue_starts_from_the_new_bundles_endpoint(self):
+        self.setup()
+        self.route("ga-example.accelerator.example.com")
+        self.route("203.0.113.20",code="ROUTE_CHANGED")
+        self.reissue()
+        self.route("203.0.113.30",code="REISSUE_READY")
+        self.setup()
+        self.assertIn("Endpoint = 203.0.113.10:51824", self.tunnel_conf().read_text())
+        self.assertFalse((self.native_state()/"endpoint").exists())
+        self.call("check",code="DEPENDENCY_MISSING" if WINDOWS else "CHECKED")
+
+    @unittest.skipIf(WINDOWS, "Unix CLI route/tunnel behavior")
+    def test_route_switches_the_running_tunnel_in_place(self):
+        self.call("setup",code="CONFIGURED")
+        self.route("ga-example.accelerator.example.com")
+        calls=[json.loads(line) for line in (self.path/"commands.jsonl").read_text().splitlines()]
+        sets=[args[2:] for name,args in calls if name=="wg" and args[:1]==["set"]]
+        self.assertEqual(sets,[["peer",self.manifest["wireguard_public_key"],"endpoint","ga-example.accelerator.example.com:51824"]])
+        self.assertEqual([args[:1] for name,args in calls if name=="wg-quick" and args[0] in ("up","down")],[["up"]])
+
+    @unittest.skipIf(WINDOWS, "Unix CLI route/tunnel behavior")
+    def test_route_leaves_a_foreign_tunnel_and_the_install_alone(self):
+        self.call("setup",code="CONFIGURED")
+        before={q.name:q.read_bytes() for q in self.native_state().iterdir()}
+        self.env["WRONG_TUNNEL"]="1"
+        self.route("ga-example.accelerator.example.com",code="TUNNEL_CONFLICT")
+        self.assertEqual(before,{q.name:q.read_bytes() for q in self.native_state().iterdir()})
 
     def test_manifest_rejects_unknown_execution_fields(self):
         self.manifest["PostUp"]="echo PRIVATE_FAILURE_SENTINEL"
@@ -770,37 +873,80 @@ elif name=="ip":
         # Setup once activated the tunnel; a reboot removed it (no tunnel-active).
         self.setup();self.fake_mosh()
         (self.path/'commands.jsonl').unlink(missing_ok=True)
-        for action in ('connect','sftp'):
+        for action in ('ssh','sftp'):
             run=subprocess.run(self.command(action),env=self.env,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=30)
             self.assertEqual(run.returncode,3,run.stderr)
             self.assertEqual(json.loads(run.stdout.splitlines()[-1])['code'],'TUNNEL_DOWN')
-            self.assertIn('bash ./bootstrap.sh setup',run.stderr)
+            self.assertIn('bash ./bootstrap.sh connect',run.stderr)
         result=self.run_in_pty('mosh')
         self.assertEqual(result.returncode,3,result.stderr)
-        self.assertIn('bash ./bootstrap.sh setup',result.stderr)
+        self.assertIn('bash ./bootstrap.sh connect',result.stderr)
         self.assertFalse((self.path/'mosh-run.json').exists())
         # No elevation, no tunnel change and no connection attempt.
         self.assertEqual(self.network_changes(),[])
         # The printed recovery command restores only this device's tunnel.
-        self.call('setup',code='CONFIGURED')
+        self.call('connect',code='CONNECTED')
         self.assertTrue((self.path/'tunnel-active').exists())
         self.assertEqual(self.run_in_pty('mosh').returncode,0)
 
     @unittest.skipIf(WINDOWS,'Unix CLI route/tunnel behavior')
-    def test_connect_with_live_tunnel_reaches_ssh(self):
+    def test_ssh_with_live_tunnel_reaches_ssh(self):
         self.setup();(self.path/'tunnel-active').touch();(self.path/'commands.jsonl').unlink(missing_ok=True)
-        subprocess.run(self.command('connect'),env=self.env,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=30)
+        subprocess.run(self.command('ssh'),env=self.env,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=30)
         calls=self.commands()
         self.assertIn('ssh',[name for name,_ in calls])
         self.assertNotIn('sudo',[name for name,_ in calls])
         self.assertFalse([1 for name,args in calls if name=='wg-quick' and args!=['--help']])
 
     @unittest.skipIf(WINDOWS,'Unix CLI route/tunnel behavior')
-    def test_connect_through_another_vpn_route_is_a_conflict(self):
+    def test_ssh_through_another_vpn_route_is_a_conflict(self):
         self.setup();self.env['ROUTE_CONFLICT']='1';(self.path/'commands.jsonl').unlink(missing_ok=True)
-        run=subprocess.run(self.command('connect'),env=self.env,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=30)
+        run=subprocess.run(self.command('ssh'),env=self.env,stdin=subprocess.DEVNULL,capture_output=True,text=True,timeout=30)
         self.assertEqual(json.loads(run.stdout.splitlines()[-1])['code'],'ROUTE_CONFLICT')
         self.assertEqual(self.network_changes(),[])
+
+    @unittest.skipIf(WINDOWS,'Unix CLI route/tunnel behavior')
+    def test_connect_starts_only_this_tunnel_and_changes_no_files(self):
+        self.setup()
+        installed={f:f.read_bytes() for f in self.native_state().iterdir()}
+        user_config=self.user_config().read_bytes()
+        self.call('connect',code='CONNECTED')
+        self.assertTrue((self.path/'tunnel-active').exists())
+        # Already running: accepted as is, not started twice.
+        self.call('connect',code='CONNECTED')
+        ups=[args for name,args in self.commands() if name=='wg-quick' and args[0]=='up']
+        self.assertEqual(len(ups),1)
+        self.assertEqual(installed,{f:f.read_bytes() for f in self.native_state().iterdir()})
+        self.assertEqual(user_config,self.user_config().read_bytes())
+        self.call('disconnect',code='DISCONNECTED')
+        self.assertFalse((self.path/'tunnel-active').exists())
+
+    @unittest.skipIf(WINDOWS,'Unix CLI route/tunnel behavior')
+    def test_connect_keeps_the_chosen_route(self):
+        self.setup()
+        self.route('ga-example.accelerator.example.com')
+        self.call('connect',code='CONNECTED')
+        ups=[args for name,args in self.commands() if name=='wg-quick' and args[0]=='up']
+        self.assertEqual(len(ups),1)
+        self.assertIn('Endpoint = ga-example.accelerator.example.com:51824',self.tunnel_conf().read_text())
+
+    @unittest.skipIf(WINDOWS,'Unix CLI route/tunnel behavior')
+    def test_connect_refuses_foreign_tunnel_and_conflicting_route(self):
+        self.setup();(self.path/'tunnel-active').touch();self.env['WRONG_TUNNEL']='1'
+        self.call('connect',code='TUNNEL_CONFLICT')
+        del self.env['WRONG_TUNNEL'];(self.path/'tunnel-active').unlink();self.env['ROUTE_CONFLICT']='1'
+        self.call('connect',code='ROUTE_CONFLICT')
+        self.assertFalse((self.path/'tunnel-active').exists())
+
+    @unittest.skipIf(WINDOWS,'Unix sudo handoff')
+    def test_connect_without_sudo_does_not_start_tunnel(self):
+        self.setup();self.env['NEEDS_SUDO']='1'
+        self.call('connect',code='NEEDS_ADMIN')
+        self.assertFalse((self.path/'tunnel-active').exists())
+
+    def test_connect_before_setup_is_not_configured(self):
+        self.call('connect',code='NOT_CONFIGURED')
+        self.assertFalse(self.state.exists() and any(self.state.rglob('*.conf')))
 
     @unittest.skipIf(WINDOWS,'Unix CLI route/tunnel behavior')
     def test_verify_distinguishes_down_from_foreign_tunnel(self):
