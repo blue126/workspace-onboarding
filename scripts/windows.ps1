@@ -244,7 +244,7 @@ try {
         if(!$bundleDir) { Stop-Setup 'PACKAGE_HASH_REQUIRED' 'External device bundles require -Sha256.' }
         $digestPath=Join-Path $bundleDir 'device-bundle.sha256'
         if(!(Test-Path -LiteralPath $Bundle -PathType Leaf) -or !(Test-Path -LiteralPath $digestPath -PathType Leaf)) {
-            Stop-Setup 'PACKAGE_MISSING' 'Download the device bundle from https://cc.willfan.me/me, unpack only the outer ZIP and put its three files in %USERPROFILE%/Downloads/employee-workspace (see README); project deployment/ is the fallback.'
+            Stop-Setup 'PACKAGE_MISSING' 'Download the device bundle from https://remotecc.net/me, unpack only the outer ZIP and put its three files in %USERPROFILE%/Downloads/employee-workspace (see README); project deployment/ is the fallback.'
         }
         Assert-Regular $digestPath
         $Sha256=[IO.File]::ReadAllText($digestPath).Trim()

@@ -21,9 +21,9 @@
 | TUNNEL_DOWN | 本设备 WireGuard 隧道没有运行，常见于 Mac 或 Linux 重启后（隧道不会自动恢复）。`ssh`、`sftp`、`mosh`、verify 都会报此代码。由本人在交互终端运行 `bash ./bootstrap.sh connect`（曾用 `--bundle`/`--sha256`/`--state-root` 时带同样参数），输入本人 sudo 密码，得到 `CONNECTED` 后重试原命令 |
 | ROUTE_APPLY_FAILED / ROUTE_WRITE_FAILED | route 换线路没完成，见 [换线路](route.md#第-3-步route) |
 | TUNNEL_CONFLICT / ROUTE_CONFLICT | 已有隧道或路由冲突；核对是否本设备旧手工隧道，由本人处理迁移，不停止其他 VPN。`ssh`/`sftp`/`mosh` 报 `ROUTE_CONFLICT` 表示到入口的路由走了其他网卡或 VPN |
-| NO_RECENT_HANDSHAKE | 激活隧道并触发连接，检查 Endpoint／网络；在获准网络上重试 |
+| NO_RECENT_HANDSHAKE | 激活隧道并触发连接。还没改到普通线路时，按 [README 第 3 步](../README.md#第-3-步check--setup--verify) 先确认当前网络「已接入」，再改到普通线路；已在普通线路上就检查 Endpoint／网络 |
 | SSH_HOST_KEY_MISMATCH | 主机身份改变；暂停并联系管理员核对，不删除 known_hosts、不关闭严格校验 |
-| SSH_CONNECTION_FAILED | 核对 WireGuard、设备是否启用、网络和系统时间 |
+| SSH_CONNECTION_FAILED | 首次接入、还没改到普通线路时，多半是加速线路没连上，按 [README 第 3 步](../README.md#第-3-步check--setup--verify) 处理；已在普通线路上就核对 WireGuard、设备是否启用、网络和系统时间 |
 | WORKSPACE_ID_MISMATCH | 分配用户／VM 不正确，退出并联系管理员 |
 | SSH_PROTOCOL_FAILED / VM_BASELINE_FAILED | 验证记录不完整或基础助手异常，停止并报管理员；不改 bashrc、不创建垫片、不自行慢喂命令 |
 | VERIFY_TIMEOUT | SSH 60秒或 SFTP 30秒未结束，停止反馈，不反复验证或延长超时 |

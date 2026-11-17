@@ -21,7 +21,7 @@
 
 ## 第 2 步：改用加速线路前，确认当前网络已接入
 
-- **需求：** 加速线路只接受员工接入过的网络。请员工打开 https://cc.willfan.me/me ，确认「网络状态」一行的按钮显示「已接入」；显示「接入网络」时先点一下，等它变成「已接入」。
+- **需求：** 加速线路只接受员工接入过的网络。请员工打开 https://remotecc.net/me ，确认「网络状态」一行的按钮显示「已接入」；显示「接入网络」时先点一下，等它变成「已接入」。
 - **改回普通线路时跳过这一步。**
 
 ## 第 3 步：route
@@ -49,7 +49,7 @@
 - **验收：** `CONNECTION_VERIFIED` 或 `CLAUDE_AUTH_USER_PENDING`。把结果告诉员工：现在用的是哪条线路。
 - **可能遇到的问题：**
   - `TUNNEL_DOWN` → 隧道没在运行，运行 `connect` 后再 verify。
-  - 改用加速线路后 `NO_RECENT_HANDSHAKE` 或 `SSH_CONNECTION_FAILED` → 请员工回到 https://cc.willfan.me/me 确认当前网络显示「已接入」，再 verify；还不通过，改回普通线路，verify 通过后请员工发邮件到 hello@willfan.me 说明情况。
+  - 改用加速线路后 `NO_RECENT_HANDSHAKE` 或 `SSH_CONNECTION_FAILED` → 请员工回到 https://remotecc.net/me 确认当前网络显示「已接入」，再 verify；还不通过，改回普通线路，verify 通过后请员工发邮件到 hello@remotecc.net 说明情况。
   - 其他 `code` → [故障处理](troubleshooting.md)。
 
 之后 connect、setup、verify 都沿用选好的线路；管理员换发新包后以新包为准。

@@ -12,7 +12,7 @@
 
 1. **失败即停。** bootstrap 的 check/setup/verify 每次输出一行 JSON，以其中的 `code` 判断，不以退出码判断；外层 ZIP 检查只看最后一行 `READY`/`STOP`；`ssh`、`sftp`、`mosh` 等交互入口不输出 JSON。出错就停下，把命令、系统和 `code` 告诉员工，按 [故障处理](docs/troubleshooting.md) 处理；不改条件、不反复重试、不绕过。
 2. **员工只做下表的事，每次先说明原因。** 其余都由你完成。
-3. **不收集秘密。** 设备包由员工本人在 https://cc.willfan.me/me 下载；你不代为登录，不索取验证码、密码、Cookie 或令牌。sudo 密码和 UAC 由员工在自己的终端或弹窗里输入，见 [系统授权](docs/system-authorization.md)。
+3. **不收集秘密。** 设备包由员工本人在 https://remotecc.net/me 下载；你不代为登录，不索取验证码、密码、Cookie 或令牌。sudo 密码和 UAC 由员工在自己的终端或弹窗里输入，见 [系统授权](docs/system-authorization.md)。
 4. **私钥不出现在任何输出里。** 不打开内层设备包，不打印、上传或转发密钥，不执行包内文件；提醒员工妥善保管设备包。
 5. **不动别人的东西。** 不覆盖或复用接收目录里已有的设备文件，不停止其他 VPN；冲突先问员工。
 6. **Claude 只在 VM 里登录。** 员工在 VM 内运行 `workspace-login`，在 VM 的浏览器（本机浏览器经 VPN 打开 `workspace-login` 显示的地址看到的 VM 桌面）里完成；不在本机登录，不用本机浏览器打开授权链接或登录邮件里的链接。
@@ -21,7 +21,8 @@
 
 | 员工要做的事 | 你向员工说明的原因 |
 | --- | --- |
-| 登录 https://cc.willfan.me/me ，点击「下载设备接入包」 | 登录验证码只发到你的邮箱，设备包里有你专属的私钥。登录后可随时重新下载；页面显示没有设备包时，请发邮件到 hello@willfan.me 重新发送。 |
+| 登录 https://remotecc.net/me ，点击「下载设备接入包」 | 登录验证码只发到你的邮箱，设备包里有你专属的私钥。登录后可随时重新下载；页面显示没有设备包时，请发邮件到 hello@remotecc.net 重新发送。 |
+| 同一页面「网络状态」一行点「接入网络」，等按钮变成「已接入」 | 设备包默认走加速线路，它只接受你接入过的网络。换了网络（例如从家里到公司、改用手机热点）要在新网络上再点一次。 |
 | macOS / Linux：在终端输入 sudo 密码 | 安装 VPN、Mosh 等软件并启用隧道要改系统网络设置；密码只在你自己的终端里输入，通常一次即可。 |
 | Windows：在 UAC 弹窗点「是」 | 安装 WireGuard 隧道服务需要管理员权限；setup 和 verify 在同一个管理员窗口里运行，只需确认一次。 |
 | 条件：安装缺少的 Git / python3 / unzip / Homebrew | 用来下载本项目、检查和解开设备包、安装客户端；安装需要你确认或输入密码。见 [系统授权](docs/system-authorization.md#会装什么为什么)。 |
@@ -47,6 +48,8 @@
 
 ## 第 3 步：check → setup → verify
 
+**开始前：** 请员工在 https://remotecc.net/me 的「网络状态」一行点「接入网络」，等按钮变成「已接入」（见上表）。已经显示「已接入」就跳过。不接入时，默认的加速线路连不上，verify 会报 `SSH_CONNECTION_FAILED` 或 `NO_RECENT_HANDSHAKE`。
+
 原样使用这些入口，在源码目录运行：
 
 | 动作 | macOS / Linux | Windows（setup、verify 在管理员 PowerShell 中） |
@@ -63,6 +66,11 @@
   - `MANIFEST_UNSUPPORTED` → 设备包格式已停用，请员工联系管理员换发。
   - `TLS_PIN_FAILED`（verify）→ VM 浏览器入口的证书与设备包不符；停止，不要打开或信任该地址，请员工联系管理员。
   - `SSH_CONFIG_UNSAFE` → 隧道已配好，但 `~/.ssh/config` 不能安全写入，登录别名不可用；请员工决定，登录改用下面的备选。
+  - verify 报 `SSH_CONNECTION_FAILED` 或 `NO_RECENT_HANDSHAKE`，且这台电脑还没有改到普通线路 → 多半是默认的加速线路没连上：
+    1. 请员工回到 https://remotecc.net/me 确认当前网络显示「已接入」（没有就点「接入网络」），等 1 分钟再 verify 一次。
+    2. 还不通过，按 [换线路](docs/route.md#第-3-步route) 改到普通线路：macOS / Linux `bash ./bootstrap.sh route --endpoint 159.13.46.201`，Windows（管理员 PowerShell）`powershell -ExecutionPolicy Bypass -File .\bootstrap.ps1 route -Endpoint 159.13.46.201`，输出 `ROUTE_CHANGED` 后再 verify。
+    3. 通过后告诉员工现在用的是普通线路，请他发邮件到 hello@remotecc.net 说明当前网络连不上加速线路。普通线路上仍不通过 → 不再换线路，按 [故障处理](docs/troubleshooting.md) 处理。
+
   - 其他 `code` → [故障处理](docs/troubleshooting.md)。
 
 ## 第 4 步：交接登录方式
@@ -81,7 +89,7 @@
 - **证书（由你核对，不交给员工）：** 只有 verify 输出 `desktop_tls=passed` 才让员工继续：这表示 verify 已用设备包里的 pin 核对过该地址的证书。此时告诉员工浏览器的证书提示是正常的，可以继续访问；不要请员工查看或比对指纹。`desktop_tls` 不是 `passed` 或出现 `TLS_PIN_FAILED` 时停止，请员工联系管理员，不要让员工打开该地址。
 - **验收：** 员工再运行一次 verify，结果 `CONNECTION_VERIFIED`（`claude_auth=passed`）。
 - **可能遇到的问题：** 页面打不开 → VPN 未连接，运行 connect；画面空白或提示桌面未启动 → 先在 mosh 里运行 `workspace-login`，再刷新；不要在本机浏览器直接打开 Claude 授权链接。
-- **完成后告诉员工：** 除了 mosh，还可以用浏览器打开 https://hapi.willfan.me （用申请邮箱的验证码登录，电脑和手机都可以）查看和继续 VM 上的 Claude Code 会话。这是同一台 VM 的网页入口，已经配置好，你不用做任何设置，也不要改动 VM 上和 HAPI 有关的配置。
+- **完成后告诉员工：** 除了 mosh，还可以用浏览器打开 https://hapi.remotecc.net （用申请邮箱的验证码登录，电脑和手机都可以）查看和继续 VM 上的 Claude Code 会话。这是同一台 VM 的网页入口，已经配置好，你不用做任何设置，也不要改动 VM 上和 HAPI 有关的配置。
 
 ## 资料目录
 

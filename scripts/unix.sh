@@ -120,7 +120,7 @@ hash_file() {
 if [[ -z "$expected_sha" ]]; then
     [[ -n "$bundle_dir" ]] || fail PACKAGE_HASH_REQUIRED "外部设备包必须提供 --sha256。"
     [[ -f "$bundle" && ! -L "$bundle" && -f "$bundle_dir/device-bundle.sha256" && ! -L "$bundle_dir/device-bundle.sha256" ]] ||
-        fail PACKAGE_MISSING "请从 https://cc.willfan.me/me 下载设备接入包，仅解开外层 ZIP，并将三份文件保存到 ~/Downloads/employee-workspace/（见 README）；找不到时可使用项目 deployment/。"
+        fail PACKAGE_MISSING "请从 https://remotecc.net/me 下载设备接入包，仅解开外层 ZIP，并将三份文件保存到 ~/Downloads/employee-workspace/（见 README）；找不到时可使用项目 deployment/。"
     expected_sha="$(tr -d '\r\n' < "$bundle_dir/device-bundle.sha256")"
 fi
 [[ "$expected_sha" =~ ^[a-f0-9]{64}$ ]] || fail PACKAGE_HASH_INVALID "设备包摘要格式无效。"
